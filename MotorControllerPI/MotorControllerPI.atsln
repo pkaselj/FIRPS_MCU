@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Atmel Studio Solution File, Format Version 11.00
+VisualStudioVersion = 14.0.23107.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "MotorControllerPI", "MotorControllerPI\MotorControllerPI.cproj", "{DCE6C7E3-EE26-4D79-826B-08594B9AD897}"
+EndProject
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "TriMotorControllerPI", "TriMotorControllerPI\TriMotorControllerPI.cproj", "{1856F3F7-7CF0-41A7-B70E-A83A88F5DD0D}"
+EndProject
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "DuoMotorController", "DuoMotorController\DuoMotorController.cproj", "{0EBAFF86-67B6-41C0-8856-AE3D12D4D53A}"
+EndProject
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "UART_Sandbox", "UART_Sandbox\UART_Sandbox.cproj", "{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|AVR = Debug|AVR
+		Release|AVR = Release|AVR
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DCE6C7E3-EE26-4D79-826B-08594B9AD897}.Debug|AVR.ActiveCfg = Debug|AVR
+		{DCE6C7E3-EE26-4D79-826B-08594B9AD897}.Debug|AVR.Build.0 = Debug|AVR
+		{DCE6C7E3-EE26-4D79-826B-08594B9AD897}.Release|AVR.ActiveCfg = Release|AVR
+		{DCE6C7E3-EE26-4D79-826B-08594B9AD897}.Release|AVR.Build.0 = Release|AVR
+		{1856F3F7-7CF0-41A7-B70E-A83A88F5DD0D}.Debug|AVR.ActiveCfg = Debug|AVR
+		{1856F3F7-7CF0-41A7-B70E-A83A88F5DD0D}.Debug|AVR.Build.0 = Debug|AVR
+		{1856F3F7-7CF0-41A7-B70E-A83A88F5DD0D}.Release|AVR.ActiveCfg = Release|AVR
+		{1856F3F7-7CF0-41A7-B70E-A83A88F5DD0D}.Release|AVR.Build.0 = Release|AVR
+		{0EBAFF86-67B6-41C0-8856-AE3D12D4D53A}.Debug|AVR.ActiveCfg = Debug|AVR
+		{0EBAFF86-67B6-41C0-8856-AE3D12D4D53A}.Debug|AVR.Build.0 = Debug|AVR
+		{0EBAFF86-67B6-41C0-8856-AE3D12D4D53A}.Release|AVR.ActiveCfg = Release|AVR
+		{0EBAFF86-67B6-41C0-8856-AE3D12D4D53A}.Release|AVR.Build.0 = Release|AVR
+		{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}.Debug|AVR.ActiveCfg = Debug|AVR
+		{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}.Debug|AVR.Build.0 = Debug|AVR
+		{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}.Release|AVR.ActiveCfg = Release|AVR
+		{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}.Release|AVR.Build.0 = Release|AVR
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
