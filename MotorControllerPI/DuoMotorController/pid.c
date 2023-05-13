@@ -94,6 +94,13 @@ float PID_Advance(pid_t* hPID, float timestep, float error)
 	hPID->current_output = current_error_term * hPID->current_error 
 		+ previous_error_term * hPID->previous_error
 		+ hPID->previous_output;
+		
+	//float current_error_term = hPID->Kp * (1 + hPID->current_time_delta / hPID->Ti);
+	//float previous_error_term = -1 * hPID->Kp;
+	//
+	//hPID->current_output = current_error_term * hPID->current_error
+	//+ previous_error_term * hPID->previous_error
+	//+ hPID->previous_output;
 
 	if (hPID->current_output > hPID->output_max)
 	{

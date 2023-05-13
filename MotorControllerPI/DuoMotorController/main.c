@@ -132,11 +132,25 @@ typedef enum {
 //#define PID_KP	(float)3.3176
 //#define PID_TI	(float)16.5668
 
-#define PID_KP	(float)2.2049
-#define PID_TI	(float)128.8773
+//#define PID_KP	(float)8.0f
+//#define PID_TI	(float)100.0f
+
+//#define PID_KP	(float)2.2049
+//#define PID_TI	(float)128.8773
+
+#define PID_KP	(float)4.0f
+#define PID_TI	(float)128.8773f
+
+//#define PID_KP	(float)50
+//#define PID_TI	(float)10
+
+//#define PID_KP	(float)30.0f
+//#define PID_TI	(float)100000.0f
 
 #define SAMPLING_FREQUENCY 62.5f
 #define SAMPLE_TIME_S (1.0f/SAMPLING_FREQUENCY)
+
+#define RPS_ALPHA 0.5f
 //////////////////////////////////////////////////////////////////////////
 
 #define PULSES_PER_ROTATION 245
@@ -158,9 +172,10 @@ typedef enum {
 #define RPM_UPPER_DISCARD_LIMIT 10
 
 // Commands last for 3.008 seconds (T_PID = 1/62.5 s)
-const uint32_t command_duration_pids = 188;
+//const uint32_t command_duration_pids = 188;
+const uint32_t command_duration_pids = 2*188;
 
-const float motor_on_rps = 0.5;
+const float motor_on_rps = 1.0f;
 
 /*
  *	End Constants
@@ -185,8 +200,6 @@ uint32_t g_command_timer_pids;
 uint8_t g_flag_command_received = 0;
 volatile int8_t g_command_buffer = 0;
 uint8_t g_flag_command_running = 0;
-
-pid_t g_pid;
 
 
 /*
@@ -358,8 +371,8 @@ void set_motor_direction(command_e command)
 		CLR_BIT(PORTB, PORTB1);
 		
 		// Motor 2
-		SET_BIT(PORTB, PORTB0);
-		CLR_BIT(PORTB, PORTB2);
+		CLR_BIT(PORTB, PORTB0);
+		SET_BIT(PORTB, PORTB2);
 		
 		break;
 		
@@ -370,8 +383,8 @@ void set_motor_direction(command_e command)
 		SET_BIT(PORTB, PORTB1);
 		
 		// Motor 2
-		CLR_BIT(PORTB, PORTB0);
-		SET_BIT(PORTB, PORTB2);
+		SET_BIT(PORTB, PORTB0);
+		CLR_BIT(PORTB, PORTB2);
 		break;
 		
 		case COMMAND_LEFT:
@@ -381,8 +394,8 @@ void set_motor_direction(command_e command)
 		CLR_BIT(PORTB, PORTB1);
 		
 		// Motor 2
-		CLR_BIT(PORTB, PORTB0);
-		SET_BIT(PORTB, PORTB2);
+		SET_BIT(PORTB, PORTB0);
+		CLR_BIT(PORTB, PORTB2);
 		break;
 		
 		case COMMAND_RIGHT:
@@ -392,8 +405,8 @@ void set_motor_direction(command_e command)
 		SET_BIT(PORTB, PORTB1);
 		
 		// Motor 2
-		SET_BIT(PORTB, PORTB0);
-		CLR_BIT(PORTB, PORTB2);
+		CLR_BIT(PORTB, PORTB0);
+		SET_BIT(PORTB, PORTB2);
 		break;
 		
 		case COMMAND_STOP:
@@ -490,7 +503,7 @@ void enable_encoder_interrupt(void)
 	SET_BIT(EICRA, ISC01);
 	
 	// Enable external interrupt
-	SET_BIT(EIMSK, INT0);
+	 SET_BIT(EIMSK, INT0);
 	//////////////////////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////////////////////
@@ -567,7 +580,8 @@ void do_update_rpm(hall_encoder_t* hEncoder)
 	// Crude low-pass (disturbance rejection) filter
 	if(new_rpm < RPM_UPPER_DISCARD_LIMIT)
 	{
-		hEncoder->current_rps = new_rpm;
+		hEncoder->current_rps = RPS_ALPHA * hEncoder->current_rps + (1-RPS_ALPHA) * new_rpm;
+		//hEncoder->current_rps = new_rpm;
 	}
 	
 	//usart_send((unsigned char*)&new_rpm, sizeof(float));
@@ -632,39 +646,49 @@ void setup_usart_receive(void)
 
 void setup_PID(void)
 {
-	PID_Init(&g_motor_1.pid, PID_KP, 0, PID_TI, 0, 95);
+	PID_Init(&g_motor_1.pid, PID_KP, 0, PID_TI, 10, 95);
 	PID_Init(&g_motor_2.pid, PID_KP, 0, PID_TI, 0, 95);
 }
 
 void do_advance_pids(void)
 {
-	float error = 0;
-	float input = 0;
+	float error_1 = 0;
+	float input_1 = 0;
 	
-	// TODO: Robust sample time calculation from 1.0f/g_motor_1.hall_encoder.current_rps
+	float error_2 = 0;
+	float input_2 = 0;
 	
-	error = g_motor_1.setpoint - g_motor_1.hall_encoder.current_rps;
-	input = PID_Advance(&g_motor_1.pid, SAMPLE_TIME_S, error);
-	OCR0A = calculate_oc_value_from_dc((uint32_t)input);
-	//OCR0A = 0xAA;
+	// TODO: Robust sample time calculation
 	
-	error = g_motor_2.setpoint - g_motor_2.hall_encoder.current_rps;
-	input = PID_Advance(&g_motor_2.pid, SAMPLE_TIME_S, error);
-	OCR0B = calculate_oc_value_from_dc((uint32_t)input);
+	error_1 = g_motor_1.setpoint - g_motor_1.hall_encoder.current_rps;
+	input_1 = PID_Advance(&g_motor_1.pid, SAMPLE_TIME_S, error_1);
+	OCR0B = calculate_oc_value_from_dc((uint32_t)input_1);
+	
+	error_2 = g_motor_2.setpoint - g_motor_2.hall_encoder.current_rps;
+	input_2 = PID_Advance(&g_motor_2.pid, SAMPLE_TIME_S, error_2);
+	OCR0A = calculate_oc_value_from_dc((uint32_t)input_2);
+	
+	TCNT0 = 0;
+	
+	//usart_send(&g_motor_2.pid.current_error, sizeof(float));
+	
+	
+	//if (PID_CheckError(&g_motor_1.pid, NULL) || PID_CheckError(&g_motor_2.pid, NULL))
+	//{
+		//do_handle_fatal_error();
+	//}
 	
 	//uint8_t a = calculate_oc_value_from_dc((uint32_t)input);
 	//usart_send(&a, 1);
 	
-	//uint16_t input_int = (uint16_t)input;
-	//usart_send((char*)&input_int, sizeof(uint16_t));
 	
-	usart_send((unsigned char*)&input, sizeof(float));
-	//const float a = PID_KP;
+	//usart_send((unsigned char*)&input_1, sizeof(float));
+	//const float a = SAMPLE_TIME_S;
 	//usart_send((unsigned char*)&a, sizeof(float));
 	
-	//usart_send((unsigned char*)&g_motor_2.hall_encoder.current_rps, sizeof(float));
-	//usart_send((unsigned char*)&error, sizeof(float));
-	//usart_send((unsigned char*)&g_motor_1.setpoint, sizeof(float));
+	usart_send((unsigned char*)&g_motor_2.hall_encoder.current_rps, sizeof(float));
+	//usart_send((unsigned char*)&error_2, sizeof(float));
+	//usart_send((unsigned char*)&g_motor_2.setpoint, sizeof(float));
 	
 }
 
