@@ -55,6 +55,7 @@
 // HAS TO BE USED IN GLOBAL SCOPE
 // #define USES_RESOURCE(X) uint8_t uses_resource_##X##_flag = 1;
 
+// To avoid "unused variable" warnings
 #define UNUSED(X) (void)X;
 //////////////////////////////////////////////////////////////////////////
 
@@ -147,12 +148,20 @@ typedef enum {
 //#define PID_KP	(float)30.0f
 //#define PID_TI	(float)100000.0f
 
+
+// PID Sampling frequency and period
 #define SAMPLING_FREQUENCY 62.5f
 #define SAMPLE_TIME_S (1.0f/SAMPLING_FREQUENCY)
-
-#define RPS_ALPHA 0.5f
 //////////////////////////////////////////////////////////////////////////
 
+// RPS (Revolutions Per Second) measurement filter
+// Implemented as Exponential Moving Average filter
+// with following difference equation
+// x[n] = RPS_ALPHA * x[n-1] + (1 - RPS_ALPHA) * u[n]
+// where x is the filtered value and u is measurement
+#define RPS_ALPHA 0.5f
+
+// IG32E-35K motor Hall encoder number of pulses per rotation
 #define PULSES_PER_ROTATION 245
 
 // Baud rate = 115.2kbps; U2X=0
@@ -164,17 +173,18 @@ typedef enum {
 	#error "Baud rate not supported for frequency"
 #endif
 
-// Defines maximum "believable" RPM value
-// All RPM values above RPM_UPPER_DISCARD_LIMIT
-// will not be saved as RPM values, instead old
+// Defines maximum "believable" RPS value
+// All RPS values above RPS_UPPER_DISCARD_LIMIT
+// will not be saved as RPS values, instead old
 // value will be held. (Crude low pass filter)
 // (Disturbance rejection)
-#define RPM_UPPER_DISCARD_LIMIT 10
+#define RPS_UPPER_DISCARD_LIMIT 10
 
 // Commands last for 3.008 seconds (T_PID = 1/62.5 s)
 //const uint32_t command_duration_pids = 188;
 const uint32_t command_duration_pids = 2*188;
 
+// Setpoint RPS (Revolutions Per Second) when motor is on
 const float motor_on_rps = 1.0f;
 
 /*
@@ -186,19 +196,33 @@ const float motor_on_rps = 1.0f;
  *	Start Global Variables
  */
 
-// Used by TIMER 1 overflow ISR to increment
-// Used to keep track of RPM pulse counters (volatile, do not use)
+// Updated by TIMER 1 overflow ISR to increment.
+// Used to extend 16-bit TIMER 1 to 32 bits.
+// Acts as higher nibble for 16-bit TIMER 1.
 uint16_t pulse_tick_counter_high_nibble = 0;
 
 // Motors
 motor_t g_motor_1;
 motor_t g_motor_2;
 
+// Signal to main loop that PID algorithm is
+// ready to be executed.
 uint8_t g_flag_pid = 0;
 
+// Incremented on each PID execution (when PID timer triggers)
+// Used to keep track of duration of current command (measured in
+// multiples of PID intervals, see 'command_duration_pids')
 uint32_t g_command_timer_pids;
+
+// Flag that indicates that there is a command in command buffer,
+// and that main loop should parse it.
 uint8_t g_flag_command_received = 0;
+
+// Command buffer that holds received raw command from UART.
+// Will be extended to an array in future.
 volatile int8_t g_command_buffer = 0;
+
+// Flag that indicated that current command is being executed.
 uint8_t g_flag_command_running = 0;
 
 
@@ -349,8 +373,10 @@ void setup_gpio_pins(void)
 		// HALL CH A - PD3
 		PIN_MODE_INPUT(DDRD, DDD3);
 		
-	// UART
+	// --- UART
+		// RX - PD0
 		PIN_MODE_INPUT(DDRD, DDD0);
+		// TX - PD1
 		PIN_MODE_OUTPUT(DDRD, DDD1);
 }
 
@@ -477,10 +503,11 @@ void configure_motor_pwm_timer(void)
 //		* Set on upcount, clear on downcount
 uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle)
 {
-	// Set phase corrected PWM value
-	// from defined duty cycle
+	// Set phase corrected PWM value from defined duty cycle
 	// NOTE: Formula used is modified for integer division
 	
+	// Phase Corrected PWM (TOP = 0xFF)
+	// with 'Set on upcount, reset on downcount'
 	return (uint8_t)((255 * ((uint32_t)100 - duty_cycle))/100);
 }
 
@@ -550,7 +577,9 @@ void enable_pulse_tick_timer(void)
 	CLR_BIT(TCCR1B, CS12);
 }
 
-void do_update_rpm(hall_encoder_t* hEncoder)
+// Calculated new RPS value for 'hEncoder' Hall Encoder
+// From saved timer values (which are saved in INT0/1 ISRs)
+void do_update_rps(hall_encoder_t* hEncoder)
 {	
 	if (NULL == hEncoder)
 	{
@@ -575,16 +604,16 @@ void do_update_rpm(hall_encoder_t* hEncoder)
 		return;
 	}
 	
-	float new_rpm = F_CPU/(ticks * PULSES_PER_ROTATION);
+	float new_rps = F_CPU/(ticks * PULSES_PER_ROTATION);
 	
 	// Crude low-pass (disturbance rejection) filter
-	if(new_rpm < RPM_UPPER_DISCARD_LIMIT)
+	if(new_rps < RPS_UPPER_DISCARD_LIMIT)
 	{
-		hEncoder->current_rps = RPS_ALPHA * hEncoder->current_rps + (1-RPS_ALPHA) * new_rpm;
-		//hEncoder->current_rps = new_rpm;
+		hEncoder->current_rps = RPS_ALPHA * hEncoder->current_rps + (1-RPS_ALPHA) * new_rps;
+		//hEncoder->current_rps = new_rps;
 	}
 	
-	//usart_send((unsigned char*)&new_rpm, sizeof(float));
+	//usart_send((unsigned char*)&new_rps, sizeof(float));
 	
 }
 
@@ -593,9 +622,12 @@ void setup_pid_timer(void)
 	// Time for timer to tick once T1 = 1024/F_CPU (prescaler = 1024).
 	// If we want timer to interrupt every T seconds, we must set compare register
 	// to N ticks where N = T/T1 = F_CPU/F_S where F_S is the sampling (interrupt) frequency.
-	// For explanation of (- 1) at the end, see documentation
+
 	//const uint8_t timer_compare_value = (uint8_t)(F_CPU/(1024 * SAMPLING_FREQUENCY));
+	
+	// 62.5 Hz
 	const uint8_t timer_compare_value = 250;
+	
 	// Set output compare register A value
 	OCR2A = timer_compare_value;
 	
@@ -621,7 +653,7 @@ void enable_pid_timer(void)
 
 void setup_usart_receive(void)
 {
-	// USART0
+	// --- USART0
 	
 	// Set baud rate to 115.2 kbps
 	UBRR0 = (uint16_t)BAUD_RATE_UBBR_115_2_KBPS;
@@ -646,8 +678,25 @@ void setup_usart_receive(void)
 
 void setup_PID(void)
 {
-	PID_Init(&g_motor_1.pid, PID_KP, 0, PID_TI, 10, 95);
-	PID_Init(&g_motor_2.pid, PID_KP, 0, PID_TI, 0, 95);
+	// PID Controller for Motor 1
+	PID_Init(
+		&g_motor_1.pid,		/* pid_t Handle				*/
+		PID_KP,				/* Kp - Proportional Term	*/
+		0,					/* Td - Derivative Term		*/
+		PID_TI,				/* Ti - Integral Term		*/
+		0,					/* Minimum PID Output Value */
+		95					/* Maximum PID Output Value */
+	);
+	
+	// PID Controller for Motor 2
+	PID_Init(
+		&g_motor_2.pid,		/* pid_t Handle				*/
+		PID_KP,				/* Kp - Proportional Term	*/
+		0,					/* Td - Derivative Term		*/
+		PID_TI,				/* Ti - Integral Term		*/
+		0,					/* Minimum PID Output Value */
+		95					/* Maximum PID Output Value */
+	);
 }
 
 void do_advance_pids(void)
@@ -668,7 +717,11 @@ void do_advance_pids(void)
 	input_2 = PID_Advance(&g_motor_2.pid, SAMPLE_TIME_S, error_2);
 	OCR0A = calculate_oc_value_from_dc((uint32_t)input_2);
 	
+	// Reset PWM timer for correct transition between duty cycles
 	TCNT0 = 0;
+	
+	//////////////////////////////////////////////////////////////////////////
+	// -------------- DEBUG
 	
 	//usart_send(&g_motor_2.pid.current_error, sizeof(float));
 	
@@ -686,18 +739,22 @@ void do_advance_pids(void)
 	//const float a = SAMPLE_TIME_S;
 	//usart_send((unsigned char*)&a, sizeof(float));
 	
-	usart_send((unsigned char*)&g_motor_2.hall_encoder.current_rps, sizeof(float));
+	//usart_send((unsigned char*)&g_motor_2.hall_encoder.current_rps, sizeof(float));
 	//usart_send((unsigned char*)&error_2, sizeof(float));
 	//usart_send((unsigned char*)&g_motor_2.setpoint, sizeof(float));
+	//////////////////////////////////////////////////////////////////////////
 	
 }
 
 void do_parse_command(void)
 {
+	// Ignore new command while current is being executed
 	if(g_flag_command_running)
 	{
 		return;
 	}	
+	
+	// Set motor speeds
 	g_motor_1.setpoint = motor_on_rps;
 	g_motor_2.setpoint = motor_on_rps;
 	
@@ -745,6 +802,7 @@ void do_on_command_complete(void)
 	g_motor_1.setpoint = 0;
 	g_motor_2.setpoint = 0;
 	
+	// Clamp PWM to 0% duty cycle
 	OCR0A = 0xFF;
 	OCR0B = 0xFF;
 	
@@ -783,13 +841,13 @@ int main(void)
     {
 		if(g_motor_1.hall_encoder.is_measurement_ready)
 		{
-			do_update_rpm(&g_motor_1.hall_encoder);
+			do_update_rps(&g_motor_1.hall_encoder);
 			g_motor_1.hall_encoder.is_measurement_ready = 0;
 		}
 		
 		if(g_motor_2.hall_encoder.is_measurement_ready)
 		{
-			do_update_rpm(&g_motor_2.hall_encoder);
+			do_update_rps(&g_motor_2.hall_encoder);
 			g_motor_2.hall_encoder.is_measurement_ready = 0;
 		}
 		
