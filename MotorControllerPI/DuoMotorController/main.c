@@ -59,6 +59,16 @@
 #define UNUSED(X) (void)X;
 //////////////////////////////////////////////////////////////////////////
 
+// usart_send(...) sends data in little_endian byte order
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	#define usart_send _usart_send_little_endian
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	#define usart_send _usart_send_big_endian
+#else
+	#error "Unknown byte order: " __BYTE_ORDER__
+#endif
+	
+
 /*
  *	End Macros
  */
@@ -286,7 +296,8 @@ void do_handle_fatal_error(void)
 	}
 }
 
-void usart_send(unsigned char* pData, int length)
+// Assumes little-endianness
+void _usart_send_little_endian(unsigned char* pData, int length)
 {
 	// Send STX (Start Byte)
 	while (!IS_BIT_SET(UCSR0A, UDRE0))
@@ -307,7 +318,8 @@ void usart_send(unsigned char* pData, int length)
 	}
 }
 
-void usart_send_reorder(unsigned char* pData, int length)
+// Assumes big-endianness
+void _usart_send_big_endian(unsigned char* pData, int length)
 {
 	// Send STX (Start Byte)
 	while (!IS_BIT_SET(UCSR0A, UDRE0))
