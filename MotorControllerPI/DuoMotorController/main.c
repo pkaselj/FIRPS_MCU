@@ -30,6 +30,8 @@
 #define NULL (void*)0
 #endif
 
+#define PRIVATE static
+
 //////////////////////////////////////////////////////////////////////////
 // -- Bitwise Operators
 #define SET_BIT(REG, BIT) REG |= _BV(BIT)
@@ -192,10 +194,10 @@ typedef enum {
 
 // Commands last for 3.008 seconds (T_PID = 1/62.5 s)
 //const uint32_t command_duration_pids = 188;
-const uint32_t command_duration_pids = 2*188;
+PRIVATE const uint32_t command_duration_pids = 2*188;
 
 // Setpoint RPS (Revolutions Per Second) when motor is on
-const float motor_on_rps = 1.0f;
+PRIVATE const float motor_on_rps = 1.0f;
 
 /*
  *	End Constants
@@ -209,31 +211,31 @@ const float motor_on_rps = 1.0f;
 // Updated by TIMER 1 overflow ISR to increment.
 // Used to extend 16-bit TIMER 1 to 32 bits.
 // Acts as higher nibble for 16-bit TIMER 1.
-uint16_t pulse_tick_counter_high_nibble = 0;
+PRIVATE volatile uint16_t pulse_tick_counter_high_nibble = 0;
 
 // Motors
-motor_t g_motor_1;
-motor_t g_motor_2;
+PRIVATE motor_t g_motor_1;
+PRIVATE motor_t g_motor_2;
 
 // Signal to main loop that PID algorithm is
 // ready to be executed.
-uint8_t g_flag_pid = 0;
+PRIVATE volatile uint8_t g_flag_pid = 0;
 
 // Incremented on each PID execution (when PID timer triggers)
 // Used to keep track of duration of current command (measured in
 // multiples of PID intervals, see 'command_duration_pids')
-uint32_t g_command_timer_pids;
+PRIVATE volatile uint32_t g_command_timer_pids;
 
 // Flag that indicates that there is a command in command buffer,
 // and that main loop should parse it.
-uint8_t g_flag_command_received = 0;
+PRIVATE volatile uint8_t g_flag_command_received = 0;
 
 // Command buffer that holds received raw command from UART.
 // Will be extended to an array in future.
-volatile int8_t g_command_buffer = 0;
+PRIVATE volatile int8_t g_command_buffer = 0;
 
 // Flag that indicated that current command is being executed.
-uint8_t g_flag_command_running = 0;
+PRIVATE volatile uint8_t g_flag_command_running = 0;
 
 
 /*
@@ -254,22 +256,22 @@ uint8_t g_flag_command_running = 0;
  *	Start User Code Implementation
  */
 
-void debug_led_on(void)
+PRIVATE void debug_led_on(void)
 {
 	SET_BIT(PORTB, PORTB5);
 }
 
-void debug_led_off(void)
+PRIVATE void debug_led_off(void)
 {
 	CLR_BIT(PORTB, PORTB5);
 }
 
-void debug_led_toggle(void)
+PRIVATE void debug_led_toggle(void)
 {
 	TGL_BIT(PORTB, PORTB5);
 }
 
-void do_blink_debug_led(void)
+PRIVATE void do_blink_debug_led(void)
 {
 	debug_led_on();
 	_delay_ms(500);
@@ -277,7 +279,7 @@ void do_blink_debug_led(void)
 	_delay_ms(500);
 }
 
-void do_blink_debug_led_times(int times)
+PRIVATE void do_blink_debug_led_times(int times)
 {
 	int i;
 	for (i = 0; i < times; ++i)
@@ -286,7 +288,7 @@ void do_blink_debug_led_times(int times)
 	}
 }
 
-void do_handle_fatal_error(void)
+PRIVATE void do_handle_fatal_error(void)
 {
 	// Signal fatal error with debug LED blinking
 	while(1)
@@ -297,7 +299,7 @@ void do_handle_fatal_error(void)
 }
 
 // Assumes little-endianness
-void _usart_send_little_endian(unsigned char* pData, int length)
+PRIVATE void _usart_send_little_endian(unsigned char* pData, int length)
 {
 	// Send STX (Start Byte)
 	while (!IS_BIT_SET(UCSR0A, UDRE0))
@@ -319,7 +321,7 @@ void _usart_send_little_endian(unsigned char* pData, int length)
 }
 
 // Assumes big-endianness
-void _usart_send_big_endian(unsigned char* pData, int length)
+PRIVATE void _usart_send_big_endian(unsigned char* pData, int length)
 {
 	// Send STX (Start Byte)
 	while (!IS_BIT_SET(UCSR0A, UDRE0))
@@ -340,7 +342,7 @@ void _usart_send_big_endian(unsigned char* pData, int length)
 	}
 }
 
-inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder)
+PRIVATE inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder)
 {
 	if (NULL == hEncoder)
 	{
@@ -360,7 +362,7 @@ inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder)
 }
 
 
-void setup_gpio_pins(void)
+PRIVATE void setup_gpio_pins(void)
 {
 	// DEBUG INBUILD-LED
 	PIN_MODE_OUTPUT(DDRB, DDB5);
@@ -392,7 +394,7 @@ void setup_gpio_pins(void)
 		PIN_MODE_OUTPUT(DDRD, DDD1);
 }
 
-void set_motor_direction(command_e command)
+PRIVATE void set_motor_direction(command_e command)
 {
 	// Clockwise direction = INA & ~INB
 	
@@ -465,7 +467,7 @@ void set_motor_direction(command_e command)
 
 }
 
-void configure_motor_pwm_timer(void)
+PRIVATE void configure_motor_pwm_timer(void)
 {
 	//////////////////////////////////////////////////////////////////////////
 	// Two motors need two PWM channels (Output Compare Registers):
@@ -513,7 +515,7 @@ void configure_motor_pwm_timer(void)
 //		* 8 bit timer
 //		* Phase corrected PWM mode
 //		* Set on upcount, clear on downcount
-uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle)
+PRIVATE inline uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle)
 {
 	// Set phase corrected PWM value from defined duty cycle
 	// NOTE: Formula used is modified for integer division
@@ -524,7 +526,7 @@ uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle)
 }
 
 
-void enable_encoder_interrupt(void)
+PRIVATE void enable_encoder_interrupt(void)
 {
 	// Enable Pullups (Disable pullup blockade)
 	CLR_BIT(MCUCR, PUD);
@@ -563,7 +565,7 @@ void enable_encoder_interrupt(void)
 
 }
  
-void configure_pulse_tick_timer(void) 
+PRIVATE void configure_pulse_tick_timer(void) 
 {
 	// Set normal mode of operation
 	CLR_BIT(TCCR1A, COM1A0);
@@ -578,7 +580,7 @@ void configure_pulse_tick_timer(void)
 	TCNT1 = 0;
 }
 
-void enable_pulse_tick_timer(void)
+PRIVATE void enable_pulse_tick_timer(void)
 {
 	// Enable overflow interrupt	
 	SET_BIT(TIMSK1, TOIE1);
@@ -591,7 +593,7 @@ void enable_pulse_tick_timer(void)
 
 // Calculated new RPS value for 'hEncoder' Hall Encoder
 // From saved timer values (which are saved in INT0/1 ISRs)
-void do_update_rps(hall_encoder_t* hEncoder)
+PRIVATE void do_update_rps(hall_encoder_t* hEncoder)
 {	
 	if (NULL == hEncoder)
 	{
@@ -629,7 +631,7 @@ void do_update_rps(hall_encoder_t* hEncoder)
 	
 }
 
-void setup_pid_timer(void)
+PRIVATE void setup_pid_timer(void)
 {
 	// Time for timer to tick once T1 = 1024/F_CPU (prescaler = 1024).
 	// If we want timer to interrupt every T seconds, we must set compare register
@@ -652,7 +654,7 @@ void setup_pid_timer(void)
 	SET_BIT(TCCR2B, WGM22);
 }
 
-void enable_pid_timer(void)
+PRIVATE void enable_pid_timer(void)
 {
 	// Enable interrupt
 	SET_BIT(TIMSK2, OCIE2A);
@@ -663,7 +665,7 @@ void enable_pid_timer(void)
 	SET_BIT(TCCR2B, CS22);
 }
 
-void setup_usart_receive(void)
+PRIVATE void setup_usart_receive(void)
 {
 	// --- USART0
 	
@@ -688,7 +690,7 @@ void setup_usart_receive(void)
 
 }
 
-void setup_PID(void)
+PRIVATE void setup_PID(void)
 {
 	// PID Controller for Motor 1
 	PID_Init(
@@ -711,7 +713,7 @@ void setup_PID(void)
 	);
 }
 
-void do_advance_pids(void)
+PRIVATE void do_advance_pids(void)
 {
 	float error_1 = 0;
 	float input_1 = 0;
@@ -758,7 +760,7 @@ void do_advance_pids(void)
 	
 }
 
-void do_parse_command(void)
+PRIVATE void do_parse_command(void)
 {
 	// Ignore new command while current is being executed
 	if(g_flag_command_running)
@@ -807,7 +809,7 @@ void do_parse_command(void)
 	g_flag_command_running = 1;
 }
 
-void do_on_command_complete(void)
+PRIVATE void do_on_command_complete(void)
 {
 	//set_motor_direction(COMMAND_STOP);
 	
