@@ -11,6 +11,8 @@ Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "DuoMotorController", "DuoMo
 EndProject
 Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "UART_Sandbox", "UART_Sandbox\UART_Sandbox.cproj", "{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}"
 EndProject
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "MegaMotorController", "MegaMotorController\MegaMotorController.cproj", "{3D3FF4F1-73AA-41AF-83C0-42A77B02337F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|AVR = Debug|AVR
@@ -33,6 +35,10 @@ Global
 		{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}.Debug|AVR.Build.0 = Debug|AVR
 		{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}.Release|AVR.ActiveCfg = Release|AVR
 		{70E54919-1B7F-4CA5-9BE3-D1F4FF88BFFB}.Release|AVR.Build.0 = Release|AVR
+		{3D3FF4F1-73AA-41AF-83C0-42A77B02337F}.Debug|AVR.ActiveCfg = Debug|AVR
+		{3D3FF4F1-73AA-41AF-83C0-42A77B02337F}.Debug|AVR.Build.0 = Debug|AVR
+		{3D3FF4F1-73AA-41AF-83C0-42A77B02337F}.Release|AVR.ActiveCfg = Release|AVR
+		{3D3FF4F1-73AA-41AF-83C0-42A77B02337F}.Release|AVR.Build.0 = Release|AVR
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
