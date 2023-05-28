@@ -24,10 +24,13 @@
 	Begin Public Interface
 */
 
+// Configure PIN_T as output. E.g. PIN_MODE_OUTPUT(PIN_A2)
 #define PIN_MODE_OUTPUT(PIN_T)  (DDR_REG_(PIN_T) |= (1 << DDR_BIT_(PIN_T)))
+// Configure PIN_T as input. E.g. PIN_MODE_INOPUT(PIN_A2)
 #define PIN_MODE_INPUT(PIN_T)	(DDR_REG_(PIN_T) &= ~(1 << DDR_BIT_(PIN_T)))
 
-
+// Write 1 or 0 to pin PIN_T. NOTE: Pin must be configured as output.
+// E.g. WRITE_PIN(PIN_A2, 1)
 #define WRITE_PIN(PIN_T, VALUE) CONCAT(WRITE_PIN_VALUE_,VALUE)(PIN_T)
 
 #define ENABLE_PULLUP(PIN_T)	WRITE_PIN(PIN_T, 1)
@@ -42,6 +45,9 @@
 /*
 	Begin Pin Definitions
 */
+
+// By convention, only these defines should be used
+// as arguments to macros that take PIN_T
 
 #define PIN_A0 A0
 #define PIN_A1 A1
@@ -191,8 +197,8 @@
 //#define STR_(X) #X
 //#define STR(X) STR_(X)
 
-#define WRITE_PIN_VALUE_0(PIN_T) (PORT_REG_(PIN_T) |= (1 << PORT_BIT_(PIN_T)))
-#define WRITE_PIN_VALUE_1(PIN_T) (PORT_REG_(PIN_T) &= ~(1 << PORT_BIT_(PIN_T)))
+#define WRITE_PIN_VALUE_1(PIN_T) (PORT_REG_(PIN_T) |= (1 << PORT_BIT_(PIN_T)))
+#define WRITE_PIN_VALUE_0(PIN_T) (PORT_REG_(PIN_T) &= ~(1 << PORT_BIT_(PIN_T)))
 
 //////////////////////////////////////////////////////////////////////////
 

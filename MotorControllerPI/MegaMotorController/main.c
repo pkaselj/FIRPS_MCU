@@ -700,10 +700,11 @@ PRIVATE void setup_pid_timer(void)
 	// Initialize timer value
 	TCNT4 = 0;
 	
-	// Set OC CTC mode of operation
-	CLR_BIT(TCCR4A, WGM40);
-	CLR_BIT(TCCR4A, WGM41);
-	SET_BIT(TCCR4B, WGM42);
+	// Set OC CTC (TOP = OCR4A) mode of operation
+	WRITE_BIT(TCCR4A, WGM40, 0);
+	WRITE_BIT(TCCR4A, WGM41, 0);
+	WRITE_BIT(TCCR4B, WGM42, 1);
+	WRITE_BIT(TCCR4B, WGM43, 0);
 }
 
 PRIVATE void enable_pid_timer(void)
@@ -712,9 +713,9 @@ PRIVATE void enable_pid_timer(void)
 	SET_BIT(TIMSK4, OCIE4A);
 	
 	// Enable clock (prescaler = 1024)
-	SET_BIT(TCCR4B, CS40);
-	SET_BIT(TCCR4B, CS41);
-	SET_BIT(TCCR4B, CS42);
+	WRITE_BIT(TCCR4B, CS40, 1);
+	WRITE_BIT(TCCR4B, CS41, 0);
+	WRITE_BIT(TCCR4B, CS42, 1);
 }
 
 PRIVATE void setup_usart_receive(void)
@@ -1008,7 +1009,7 @@ ISR(TIMER4_COMPA_vect)
 	g_flag_pid = 1;
 }
 
-ISR(USART_RX_vect)
+ISR(USART0_RX_vect)
 {
 	if (IS_BIT_SET(UCSR0A, RXC0) && !g_flag_command_running)
 	{
