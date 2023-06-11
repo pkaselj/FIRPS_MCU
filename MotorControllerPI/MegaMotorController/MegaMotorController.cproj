@@ -159,6 +159,12 @@
     <Compile Include="pid.h">
       <SubType>compile</SubType>
     </Compile>
+    <Compile Include="stxetx_protocol.c">
+      <SubType>compile</SubType>
+    </Compile>
+    <Compile Include="stxetx_protocol.h">
+      <SubType>compile</SubType>
+    </Compile>
     <Compile Include="utils_bitops.h">
       <SubType>compile</SubType>
     </Compile>

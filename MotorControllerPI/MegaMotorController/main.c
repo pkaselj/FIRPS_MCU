@@ -20,9 +20,11 @@
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
 #include <util/delay.h>
+#include <string.h> // memset
 #include "pid.h"
 #include "utils_bitops.h"
 #include "util_pindefs.h"
+#include "stxetx_protocol.h"
 
 
 /*
@@ -102,6 +104,13 @@ typedef struct {
 	pid_t pid;
 	float setpoint;
 } motor_t;
+
+typedef enum {
+	CMD_RCV_IDLE = 0,
+	CMD_RCV_RECEIVING_IN_PROCESS = 1,
+	CMD_RCV_ESCAPE_ACTIVE = 2,
+	CMD_RCV_FULL_FRAME_READ = 3
+} command_receiver_state_e;
 
 /*
  *	End Type Definitions
@@ -263,12 +272,27 @@ PRIVATE volatile uint32_t g_command_timer_pids;
 // and that main loop should parse it.
 PRIVATE volatile uint8_t g_flag_command_received = 0;
 
+// Size of receiving command buffer in bytes
+#define COMMAND_BUFFER_SIZE 64
+// See STXETX stxetx_decode_n function description
+#define PAYLOAD_BUFFER_SIZE 64
+
 // Command buffer that holds received raw command from UART.
 // Will be extended to an array in future.
-PRIVATE volatile int8_t g_command_buffer = 0;
+PRIVATE volatile uint8_t g_command_buffer[COMMAND_BUFFER_SIZE] = {0};
+
+// Number of bytes received in g_command_buffer
+PRIVATE volatile uint8_t g_command_bytes_received = 0;
 
 // Flag that indicated that current command is being executed.
 PRIVATE volatile uint8_t g_flag_command_running = 0;
+
+PRIVATE volatile command_receiver_state_e g_command_receiver_state = CMD_RCV_IDLE;
+
+#define RECEIVE_BUFFER_SIZE 64
+PRIVATE volatile uint8_t g_receive_buffer[RECEIVE_BUFFER_SIZE] = {0};
+PRIVATE volatile uint8_t g_bytes_in_rx_buffer = 0;
+PRIVATE volatile uint8_t g_command_bytes_processed = 0;
 
 
 /*
@@ -846,28 +870,43 @@ PRIVATE void do_parse_command(void)
 	
 	command_e command = COMMAND_UNKNOWN;
 	
-	// Weird USART bug that sets MSB bit to one
-	g_command_buffer = g_command_buffer & 0x7F;
+	uint8_t payload_buffer[PAYLOAD_BUFFER_SIZE] = {0};
+	stxetx_frame_t command_frame;
+	stxetx_init_empty_frame(&command_frame);
+	uint8_t status = stxetx_decode_n(
+		g_command_buffer,
+		&command_frame,
+		g_command_bytes_received,
+		payload_buffer,
+		PAYLOAD_BUFFER_SIZE
+	);
 	
-	switch(g_command_buffer)
+	if (status != ERROR_NO_ERROR)
 	{
-		case 'w':
+		// Error State:
+		// TODO: Write to EEPROM
+		return;
+	}
+	
+	switch(command_frame.msg_type)
+	{
+		case MSG_TYPE_GO_FORWARD:
 		command = COMMAND_FORWARD;
 		//do_blink_debug_led_times(1);
 		break;
-		case 's':
+		case MSG_TYPE_GO_BACKWARD:
 		command = COMMAND_BACKWARD;
 		//do_blink_debug_led_times(2);
 		break;
-		case 'a':
+		case MSG_TYPE_ROTATE_LEFT:
 		command = COMMAND_LEFT;
 		//do_blink_debug_led_times(3);
 		break;
-		case 'd':
+		case MSG_TYPE_ROTATE_RIGHT:
 		command = COMMAND_RIGHT;
 		//do_blink_debug_led_times(4);
 		break;
-		case 'x':
+		case MSG_TYPE_STOP:
 		command = COMMAND_STOP;
 		break;
 		default:
@@ -900,6 +939,98 @@ PRIVATE void do_on_command_complete(void)
 	//debug_led_off();
 }
 
+PRIVATE inline void command_buffer_write_byte(uint8_t data_byte)
+{
+	g_command_buffer[g_command_bytes_received++] = data_byte;
+}
+
+PRIVATE inline void clear_command_buffer()
+{
+	g_command_bytes_received = 0;
+	memset(g_command_buffer, 0, COMMAND_BUFFER_SIZE);
+}
+
+PRIVATE void clear_rx_buffer()
+{
+	g_command_bytes_processed = 0;
+	g_bytes_in_rx_buffer = 0;
+	memset(g_receive_buffer, 0, RECEIVE_BUFFER_SIZE);
+}
+
+void do_on_command_byte_received(uint8_t byte_received)
+{
+	switch (g_command_receiver_state)
+	{
+		case CMD_RCV_IDLE:
+		if(stxetx_is_character_frame_start_delimiter(byte_received))
+		{
+			clear_command_buffer();
+			command_buffer_write_byte(byte_received);
+			g_command_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
+		}
+		else
+		{
+			// Error state:
+			// Invalid character received, expected STX character
+			// TODO Write error data to EEPROM
+			goto error;
+		}
+		break;
+		case CMD_RCV_RECEIVING_IN_PROCESS:
+		if (stxetx_is_character_frame_end_delimiter(byte_received))
+		{
+			command_buffer_write_byte(byte_received);
+			clear_rx_buffer();
+			g_command_receiver_state = CMD_RCV_FULL_FRAME_READ;
+			g_flag_command_received = 1;
+		}
+		else if(stxetx_is_character_escape(byte_received))
+		{
+			g_command_receiver_state = CMD_RCV_ESCAPE_ACTIVE;
+		}
+		else if(g_command_bytes_received < COMMAND_BUFFER_SIZE)
+		{
+			command_buffer_write_byte(byte_received);
+		}
+		else
+		{
+			// Error state:
+			// Buffer Overflowed
+			goto error;
+		}
+		break;
+		case CMD_RCV_ESCAPE_ACTIVE:
+		if (g_command_bytes_received < COMMAND_BUFFER_SIZE)
+		{
+			command_buffer_write_byte(byte_received);
+			g_command_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
+		}
+		else
+		{
+			// Error state:
+			// Buffer Overflowed
+			goto error;
+		}
+		break;
+		case CMD_RCV_FULL_FRAME_READ:
+		// Always an error case
+		// Should be reset externally after reading command
+		goto error;
+		default:
+		// Error state:
+		// Unknown State
+		goto error;
+	}
+	
+	return;
+	
+	error:
+	g_command_receiver_state = CMD_RCV_IDLE;
+	clear_command_buffer();
+	clear_rx_buffer();
+	return;
+}
+
 
 int main(void)
 {
@@ -927,8 +1058,15 @@ int main(void)
 	g_motor_2.hall_encoder.current_rps = 0;
 	g_motor_3.hall_encoder.current_rps = 0;
 	
+	g_command_receiver_state = CMD_RCV_IDLE;
+	
     while (1) 
     {
+		if(g_command_bytes_processed < g_bytes_in_rx_buffer && g_command_receiver_state != CMD_RCV_FULL_FRAME_READ)
+		{
+			do_on_command_byte_received(g_receive_buffer[g_command_bytes_processed++]);
+		}
+		
 		if(g_motor_1.hall_encoder.is_measurement_ready)
 		{
 			do_update_rps(&g_motor_1.hall_encoder);
@@ -958,6 +1096,7 @@ int main(void)
 			// TODO: do not set command running flag on unknown command
 			do_parse_command();
 			g_flag_command_received = 0;
+			g_command_receiver_state = CMD_RCV_IDLE;
 		}
 		
 		if(g_flag_command_running && g_command_timer_pids >= command_duration_pids)
@@ -1013,8 +1152,14 @@ ISR(USART0_RX_vect)
 {
 	if (IS_BIT_SET(UCSR0A, RXC0) && !g_flag_command_running)
 	{
-		g_command_buffer = UDR0;
-		g_flag_command_received = 1;
+		//g_command_buffer = UDR0;
+		//g_flag_command_received = 1;
+		uint8_t byte_received = UDR0;
+		
+		// For some reason, MSB is always 1
+		byte_received &= 0x7F;
+		
+		g_receive_buffer[g_bytes_in_rx_buffer++] = byte_received;
 	}
 	else
 	{
