@@ -1,38 +1,46 @@
 /*
- * UART_Sandbox.c
+ * DuoMotorControllerPI.c
  *
- * Created: 5/9/2023 5:21:59 PM
+ * Created: 5/27/2023 7:17:33 PM
  * Author : KASO
  */ 
 
+/*
+	This code implements PI
+	control for THREE 
+	vnh2sp30 motor drivers
+	on Arduino Mega board.
+*/
+
 #ifndef F_CPU
-#define F_CPU 16000000
+	#define F_CPU 16000000
 #endif
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
+#include <string.h> // memset
+#include "utils_bitops.h"
+#include "util_pindefs.h"
+#include "stxetx_protocol.h"
 
-//////////////////////////////////////////////////////////////////////////
-// -- Bitwise Operators
-#define SET_BIT(REG, BIT) REG |= _BV(BIT)
-#define CLR_BIT(REG, BIT) REG &= ~_BV(BIT)
-#define TGL_BIT(REG, BIT) REG ^= _BV(BIT)
 
-#define WRITE_BIT(REG, BIT, VAL) WRITE_BIT_##VAL(REG, BIT)
-#define WRITE_BIT_1(REG, BIT) SET_BIT(REG, BIT)
-#define WRITE_BIT_0(REG, BIT) CLR_BIT(REG, BIT)
-		
+/*
+ *	Begin Macros
+ */
 
-#define IS_BIT_SET(REG, BIT) (REG & _BV(BIT))
+#ifndef NULL
+#define NULL (void*)0
+#endif
 
-#define GET_BYTE(REG, OFFSET) (uint8_t)((REG >> OFFSET) & 0xFF)
-//////////////////////////////////////////////////////////////////////////
+#define PRIVATE static
+
 
 //////////////////////////////////////////////////////////////////////////
 // ------ Pin Modes
-#define PIN_MODE_OUTPUT(REG, BIT) SET_BIT(REG, BIT)
-#define PIN_MODE_INPUT(REG, BIT)  CLR_BIT(REG, BIT)
+//#define PIN_MODE_OUTPUT(REG, BIT) SET_BIT(REG, BIT)
+//#define PIN_MODE_INPUT(REG, BIT)  CLR_BIT(REG, BIT)
 //////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////
@@ -43,75 +51,159 @@
 // HAS TO BE USED IN GLOBAL SCOPE
 // #define USES_RESOURCE(X) uint8_t uses_resource_##X##_flag = 1;
 
+// To avoid "unused variable" warnings
 #define UNUSED(X) (void)X;
 //////////////////////////////////////////////////////////////////////////
 
+// usart_send(...) sends data in little_endian byte order
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	#define usart_send _usart_send_little_endian
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	#define usart_send _usart_send_big_endian
+#else
+	#error "Unknown byte order: " __BYTE_ORDER__
+#endif
+	
+
+/*
+ *	End Macros
+ */
+
+/*
+ *	Begin Type Definitions
+ */
+
+typedef enum {
+	CMD_RCV_IDLE = 0,
+	CMD_RCV_RECEIVING_IN_PROCESS = 1,
+	CMD_RCV_ESCAPE_ACTIVE = 2,
+	CMD_RCV_FULL_FRAME_READ = 3
+} command_receiver_state_e;
+
+/*
+ *	End Type Definitions
+ */
+
+
+/*
+ *	Begin Pin Definitions
+ */
+
+#define ONBOARD_LED		PIN_B5
+
+/*
+ *	End Pin Definitions
+ */
+
+/*
+ *	Begin Constants
+ */ 
+
+//////////////////////////////////////////////////////////////////////////
+// ------- Rover UART Commands
+
+typedef enum {
+	COMMAND_FORWARD,
+	COMMAND_BACKWARD,
+	COMMAND_LEFT,
+	COMMAND_RIGHT,
+	COMMAND_STOP,
+	COMMAND_UNKNOWN
+} command_e;
+
+//////////////////////////////////////////////////////////////////////////
 
 // Baud rate = 115.2kbps; U2X=0
-#if (F_CPU == 16000000)
 #define BAUD_RATE_UBBR_115_2_KBPS 8
-#define BAUD_RATE_UBBR_9_6_KBPS 103
-#else
-#error "Baud rate not supported for frequency"
-#endif
 
-#define BAUD_RATE_UBBR BAUD_RATE_UBBR_9_6_KBPS
-
-#define DEBUG_LED_HALF_PERIOD_FLICKER_MS 50
-#define DEBUG_LED_HALF_PERIOD_TOGGLE_MS  250
-
-#define UART_SEND_INTERBYTE_PAUSE_MS 10
+// Commands last for 3.008 seconds (T_PID = 1/62.5 s)
+//const uint32_t command_duration_pids = 188;
+PRIVATE const uint32_t command_duration_pids = 2*188;
 
 
+/*
+ *	End Constants
+ */
 
-volatile uint8_t g_command_buffer;
-uint8_t g_flag_command_received;
 
-void debug_led_on(void)
+/*
+ *	Start Global Variables
+ */
+
+
+// Incremented on each PID execution (when PID timer triggers)
+// Used to keep track of duration of current command (measured in
+// multiples of PID intervals, see 'command_duration_pids')
+PRIVATE volatile uint32_t g_command_timer_pids;
+
+// Flag that indicates that there is a command in command buffer,
+// and that main loop should parse it.
+PRIVATE volatile uint8_t g_flag_command_received = 0;
+
+// Size of receiving command buffer in bytes
+#define COMMAND_BUFFER_SIZE 64
+// See STXETX stxetx_decode_n function description
+#define PAYLOAD_BUFFER_SIZE 64
+
+// Command buffer that holds received raw command from UART.
+// Will be extended to an array in future.
+PRIVATE volatile uint8_t g_command_buffer[COMMAND_BUFFER_SIZE] = {0};
+
+// Number of bytes received in g_command_buffer
+PRIVATE volatile uint8_t g_command_bytes_received = 0;
+
+// Flag that indicated that current command is being executed.
+PRIVATE volatile uint8_t g_flag_command_running = 0;
+
+PRIVATE volatile command_receiver_state_e g_command_receiver_state = CMD_RCV_IDLE;
+
+#define RECEIVE_BUFFER_SIZE 64
+PRIVATE volatile uint8_t g_receive_buffer[RECEIVE_BUFFER_SIZE] = {0};
+PRIVATE volatile uint8_t g_bytes_in_rx_buffer = 0;
+PRIVATE volatile uint8_t g_command_bytes_processed = 0;
+
+/*
+ *	End Global Variables
+ */
+
+/*
+ *	Start User Code Declaration
+ */
+
+
+/*
+ *	End User Code Declaration
+ */
+
+
+/*
+ *	Start User Code Implementation
+ */
+
+PRIVATE void debug_led_on(void)
 {
-	SET_BIT(PORTB, PORTB5);
+	WRITE_PIN(ONBOARD_LED, 1);
 }
 
-void debug_led_off(void)
+PRIVATE void debug_led_off(void)
 {
-	CLR_BIT(PORTB, PORTB5);
+	WRITE_PIN(ONBOARD_LED, 0);
 }
 
-void debug_led_toggle(void)
+PRIVATE void debug_led_toggle(void)
 {
-	TGL_BIT(PORTB, PORTB5);
+	TOGGLE_PIN(ONBOARD_LED);
 }
 
-void do_flicker_debug_led_indefinitely()
+PRIVATE void do_blink_debug_led(void)
 {
-	while(1)
-	{
-		debug_led_toggle();
-		_delay_ms(DEBUG_LED_HALF_PERIOD_FLICKER_MS);
-	}
+	debug_led_on();
+	_delay_ms(500);
+	debug_led_off();
+	_delay_ms(500);
 }
 
-void do_flicker_debug_led(int duration_ms)
-{
-	int N = duration_ms / (2 * DEBUG_LED_HALF_PERIOD_FLICKER_MS);
-	
-	int i;
-	for (i = 0; i < N; ++i)
-	{
-		debug_led_toggle();
-		_delay_ms(DEBUG_LED_HALF_PERIOD_FLICKER_MS);
-	}
-}
-
-void do_blink_debug_led()
-{
-	debug_led_toggle();
-	_delay_ms(DEBUG_LED_HALF_PERIOD_TOGGLE_MS);
-	debug_led_toggle();
-	_delay_ms(DEBUG_LED_HALF_PERIOD_TOGGLE_MS);
-}
-
-void do_blink_debug_led_times(int times)
+PRIVATE void do_blink_debug_led_times(int times)
 {
 	int i;
 	for (i = 0; i < times; ++i)
@@ -120,14 +212,27 @@ void do_blink_debug_led_times(int times)
 	}
 }
 
-void do_handle_fatal_error(void)
+PRIVATE void do_handle_fatal_error(void)
 {
 	// Signal fatal error with debug LED blinking
-	do_flicker_debug_led_indefinitely();
+	while(1)
+	{
+		debug_led_toggle();
+		_delay_ms(50);
+	}
 }
 
-void usart_send(char* pData, int length)
+// Assumes little-endianness
+PRIVATE void _usart_send_little_endian(unsigned char* pData, int length)
 {
+	// Send STX (Start Byte)
+	while (!IS_BIT_SET(UCSR0A, UDRE0))
+	{
+		;
+	}
+	UDR0 = 0x02;
+	
+	// Send Data
 	int i;
 	for (i = 0; i < length; ++i)
 	{
@@ -139,8 +244,17 @@ void usart_send(char* pData, int length)
 	}
 }
 
-void usart_send_reorder(char* pData, int length)
+// Assumes big-endianness
+PRIVATE void _usart_send_big_endian(unsigned char* pData, int length)
 {
+	// Send STX (Start Byte)
+	while (!IS_BIT_SET(UCSR0A, UDRE0))
+	{
+		;
+	}
+	UDR0 = 0x02;
+	
+	// Send Data
 	int i;
 	for (i = length-1; i >= 0; --i)
 	{
@@ -152,22 +266,45 @@ void usart_send_reorder(char* pData, int length)
 	}
 }
 
-void setup_gpio_pins(void)
+PRIVATE void setup_pid_timer(void)
 {
-	// UART
-	PIN_MODE_INPUT(DDRD, DDD0);
-	PIN_MODE_OUTPUT(DDRD, DDD1);
+	// If we want timer to interrupt every T seconds, we must set compare register
+	// to N ticks where N = T/T1 = F_CPU/F_S where F_S is the sampling (interrupt) frequency.
+
+	//const uint8_t timer_compare_value = (uint8_t)(F_CPU/(1024 * SAMPLING_FREQUENCY));
 	
-	// DEBUG LED
-	PIN_MODE_OUTPUT(DDRB, DDB5);
+	// 62.5 Hz
+	const uint8_t timer_compare_value = 250;
+	
+	// Set output compare register A value
+	OCR2A = timer_compare_value;
+	
+	// Initialize timer value
+	TCNT2 = 0;
+	
+	// Set OC CTC mode of operation
+	CLR_BIT(TCCR2A, WGM20);
+	CLR_BIT(TCCR2A, WGM21);
+	SET_BIT(TCCR2B, WGM22);
 }
 
-void setup_usart(void)
+PRIVATE void enable_pid_timer(void)
 {
-	// USART0
+	// Enable interrupt
+	SET_BIT(TIMSK2, OCIE2A);
 	
-	// Set baud rate
-	UBRR0 = (uint16_t)BAUD_RATE_UBBR;
+	// Enable clock (prescaler = 1024)
+	SET_BIT(TCCR2B, CS20);
+	SET_BIT(TCCR2B, CS21);
+	SET_BIT(TCCR2B, CS22);
+}
+
+PRIVATE void setup_usart_receive(void)
+{
+	// --- USART0
+	
+	// Set baud rate to 115.2 kbps
+	UBRR0 = (uint16_t)BAUD_RATE_UBBR_115_2_KBPS;
 	
 	// Enable receiver
 	SET_BIT(UCSR0B, RXEN0);
@@ -176,50 +313,260 @@ void setup_usart(void)
 	// Enable transmitter
 	SET_BIT(UCSR0B, TXEN0);
 
-	// Set frame format
-	// 8 data bits
-	WRITE_BIT(UCSR0C, UCSZ00, 1);
-	WRITE_BIT(UCSR0C, UCSZ01, 1);
-	WRITE_BIT(UCSR0B, UCSZ02, 0);
-	
-	// 1 stop bit
-	WRITE_BIT(UCSR0C, USBS0, 0);
-	
-	// No parity bits
-	WRITE_BIT(UCSR0C, UPM00, 0);
-	WRITE_BIT(UCSR0C, UPM01, 0);
+	// Set frame format: 8data, 1 stop bit
+	SET_BIT(UCSR0C, UCSZ00);
+	SET_BIT(UCSR0C, UCSZ01);
+	CLR_BIT(UCSR0B, UCSZ02);
 
 	// Enable RX interrupt
 	SET_BIT(UCSR0B, RXCIE0);
+
+
 }
+
+PRIVATE void do_parse_command(void)
+{
+	// Ignore new command while current is being executed
+	if(g_flag_command_running)
+	{
+		return;
+	}	
+	
+	command_e command = COMMAND_UNKNOWN;
+	
+	uint8_t payload_buffer[PAYLOAD_BUFFER_SIZE] = {0};
+	stxetx_frame_t command_frame;
+	stxetx_init_empty_frame(&command_frame);
+	uint8_t status = stxetx_decode_n(
+		g_command_buffer,
+		&command_frame,
+		g_command_bytes_received,
+		payload_buffer,
+		PAYLOAD_BUFFER_SIZE
+	);
+	
+	if (status != ERROR_NO_ERROR)
+	{
+		// Error State:
+		// TODO: Write to EEPROM
+		return;
+	}
+	
+	switch(command_frame.msg_type)
+	{
+		case MSG_TYPE_GO_FORWARD:
+		command = COMMAND_FORWARD;
+		do_blink_debug_led_times(1);
+		break;
+		case MSG_TYPE_GO_BACKWARD:
+		command = COMMAND_BACKWARD;
+		do_blink_debug_led_times(2);
+		break;
+		case MSG_TYPE_ROTATE_LEFT:
+		command = COMMAND_LEFT;
+		do_blink_debug_led_times(3);
+		break;
+		case MSG_TYPE_ROTATE_RIGHT:
+		command = COMMAND_RIGHT;
+		do_blink_debug_led_times(4);
+		break;
+		case MSG_TYPE_STOP:
+		command = COMMAND_STOP;
+		do_blink_debug_led_times(5);
+		break;
+		default:
+		command = COMMAND_UNKNOWN;
+		do_blink_debug_led_times(6);
+		break;
+	}
+	
+	g_flag_command_running = 1;
+}
+
+PRIVATE void do_on_command_complete(void)
+{
+	//g_flag_command_running = 0;
+}
+
+PRIVATE inline void command_buffer_write_byte(uint8_t data_byte)
+{
+	g_command_buffer[g_command_bytes_received++] = data_byte;
+}
+
+PRIVATE void clear_command_buffer()
+{
+	g_command_bytes_received = 0;
+	memset(g_command_buffer, 0, COMMAND_BUFFER_SIZE);
+}
+
+PRIVATE void clear_rx_buffer()
+{
+	g_command_bytes_processed = 0;
+	g_bytes_in_rx_buffer = 0;
+	memset(g_receive_buffer, 0, RECEIVE_BUFFER_SIZE);
+}
+
+void do_on_command_byte_received(uint8_t byte_received)
+{
+	switch (g_command_receiver_state)
+	{
+		case CMD_RCV_IDLE:
+			if(stxetx_is_character_frame_start_delimiter(byte_received))
+			{
+				clear_command_buffer();
+				command_buffer_write_byte(byte_received);
+				g_command_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
+			}
+			else
+			{
+				// Error state:
+				// Invalid character received, expected STX character
+				// TODO Write error data to EEPROM
+				goto error;
+			}
+		break;
+		case CMD_RCV_RECEIVING_IN_PROCESS:
+			if (stxetx_is_character_frame_end_delimiter(byte_received))
+			{
+				command_buffer_write_byte(byte_received);
+				clear_rx_buffer();
+				g_command_receiver_state = CMD_RCV_FULL_FRAME_READ;
+				g_flag_command_received = 1;
+			}
+			else if(stxetx_is_character_escape(byte_received))
+			{
+				g_command_receiver_state = CMD_RCV_ESCAPE_ACTIVE;
+			}
+			else if(g_command_bytes_received < COMMAND_BUFFER_SIZE)
+			{
+				command_buffer_write_byte(byte_received);
+			}
+			else
+			{
+				// Error state:
+				// Buffer Overflowed
+				goto error;
+			}
+		break;
+		case CMD_RCV_ESCAPE_ACTIVE:
+			if (g_command_bytes_received < COMMAND_BUFFER_SIZE)
+			{
+				command_buffer_write_byte(byte_received);
+				g_command_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
+			}
+			else
+			{
+				// Error state:
+				// Buffer Overflowed
+				goto error;
+			}
+		break;
+		case CMD_RCV_FULL_FRAME_READ:
+			// Always an error case
+			// Should be reset externally after reading command
+			goto error;
+		default:
+		// Error state:
+		// Unknown State
+		goto error;
+	}
+	
+	return;
+	
+	error:
+	g_command_receiver_state = CMD_RCV_IDLE;
+	clear_command_buffer();
+	clear_rx_buffer();
+	return;
+}
+
 
 int main(void)
 {
-    setup_gpio_pins();
-	setup_usart();
 	
-	g_flag_command_received = 0;
+	// Setup
+	setup_pid_timer();
+	setup_usart_receive();
 	
+	// RX
+	PIN_MODE_INPUT(PIN_D0);
+	// TX
+	PIN_MODE_OUTPUT(PIN_D1);
+	// DEBUG LED
+	PIN_MODE_OUTPUT(ONBOARD_LED);
+
 	sei();
+
+	enable_pid_timer();
+	
+	debug_led_off();
+	
+	g_command_receiver_state = CMD_RCV_IDLE;
 	
     while (1) 
     {
-		if (g_flag_command_received)
+		if(g_command_bytes_processed < g_bytes_in_rx_buffer && g_command_receiver_state != CMD_RCV_FULL_FRAME_READ)
 		{
-			do_flicker_debug_led(1000);
-			float data = 4e5;
-			usart_send((char*)&data, sizeof(float));
+			do_on_command_byte_received(g_receive_buffer[g_command_bytes_processed++]);
+		}
+
+		if(g_flag_command_received)
+		{
+			// TODO: do not set command running flag on unknown command
+			do_parse_command();
 			g_flag_command_received = 0;
+			g_command_receiver_state = CMD_RCV_IDLE;
+		}
+		
+		if(g_flag_command_running /* && g_command_timer_pids >= command_duration_pids */)
+		{
+			do_on_command_complete();
+			g_flag_command_running = 0;
+			g_command_timer_pids = 0;
 		}
     }
 }
 
-ISR(USART_RX_vect)
-{
-	if (IS_BIT_SET(UCSR0A, RXC0))
-	{
-		g_command_buffer = UDR0;
-		g_flag_command_received = 1;
+/*
+ *	End User Code Implementation
+ */
+
+/*
+ *	Start Signal Handlers
+ */
+
+ISR(TIMER2_COMPA_vect)
+{	
+	// Increment command duration timer (which is measured in multiples of PID period)
+	if (g_flag_command_running)
+	{	
+		++g_command_timer_pids;
 	}
 }
+
+ISR(USART_RX_vect)
+{
+	if (IS_BIT_SET(UCSR0A, RXC0) && !g_flag_command_running)
+	{
+		//g_command_buffer = UDR0;
+		//g_flag_command_received = 1;
+		uint8_t byte_received = UDR0;
+		
+		// For some reason, MSB is always 1
+		byte_received &= 0x7F;
+		
+		g_receive_buffer[g_bytes_in_rx_buffer++] = byte_received;
+	}
+	else
+	{
+		// Read to clear RX flag
+		volatile uint8_t discard = UDR0;
+		UNUSED(discard);
+	}
+}
+
+/*
+ *	End Signal Handlers
+ */
+
 
