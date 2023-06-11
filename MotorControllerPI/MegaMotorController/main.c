@@ -125,7 +125,7 @@ typedef struct {
 //	+-----------+------------+------------+------------+
 //	| PWM       | PH6(PWM9)  | PG5(PWM4)  | PB4(PWM10) |
 //	+-----------+------------+------------+------------+
-//	| HALL CH A | PE4(PWM2)  | PE5(PWM3)  | PD2(COM9)  |
+//	| HALL CH A | PE4(PWM2)  | PE5(PWM3)  | PD2(COM19) |
 //	+-----------+------------+------------+------------+
 //	| EXT INT   | INT4       | INT5       | INT2       |
 //	+-----------+------------+------------+------------+
@@ -229,7 +229,7 @@ typedef enum {
 PRIVATE const uint32_t command_duration_pids = 2*188;
 
 // Setpoint RPS (Revolutions Per Second) when motor is on
-PRIVATE const float motor_on_rps = 1.0f;
+PRIVATE const float motor_on_rps = 0.5f;
 
 /*
  *	End Constants
@@ -604,7 +604,7 @@ PRIVATE void enable_encoder_interrupt(void)
 	// -- MOTOR 3
 	
 	// Enable pullup (IG32E Hall encoder docs require 1k external pullup)
-	ENABLE_PULLUP(MOTOR_2_HCHA);
+	ENABLE_PULLUP(MOTOR_3_HCHA);
 	
 	// TODO: MACRO FOR INT
 	// Set rising edge mode for INT4
@@ -824,7 +824,7 @@ PRIVATE void do_advance_pids(void)
 	//const float a = SAMPLE_TIME_S;
 	//usart_send((unsigned char*)&a, sizeof(float));
 	
-	//usart_send((unsigned char*)&g_motor_2.hall_encoder.current_rps, sizeof(float));
+	//usart_send((unsigned char*)&g_motor_3.hall_encoder.current_rps, sizeof(float));
 	//usart_send((unsigned char*)&error_2, sizeof(float));
 	//usart_send((unsigned char*)&g_motor_2.setpoint, sizeof(float));
 	//////////////////////////////////////////////////////////////////////////
