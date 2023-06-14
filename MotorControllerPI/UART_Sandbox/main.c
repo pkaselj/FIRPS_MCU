@@ -360,9 +360,9 @@ PRIVATE void do_parse_command(void)
 		PAYLOAD_BUFFER_SIZE
 	);
 	
-	if (status != ERROR_NO_ERROR)
+	if (status != STXETX_ERROR_NO_ERROR)
 	{
-		if (status == ERROR_BUFFER_TOO_SMALL)
+		if (status == STXETX_ERROR_BUFFER_TOO_SMALL)
 		{
 			stxetx_frame_t frame;
 			stxetx_init_empty_frame(&frame);
@@ -539,7 +539,7 @@ int main(void)
 		{
 			uint8_t value;
 			uint8_t error = CBuf_Read(&g_receive_buffer, &value);
-			if (error == ERROR_NO_ERROR)
+			if (error == STXETX_ERROR_NO_ERROR)
 			{
 				do_on_command_byte_received(value);
 			}

@@ -72,7 +72,7 @@ uint8_t stxetx_encode_n(uint8_t* p_dest_buffer, stxetx_frame_t source, uint32_t 
 {
     if (NULL == p_dest_buffer)
     {
-        return ERROR_INVALID_HANDLE;
+        return STXETX_ERROR_INVALID_HANDLE;
     }
 
     // Initialize to avoid confusion
@@ -84,12 +84,12 @@ uint8_t stxetx_encode_n(uint8_t* p_dest_buffer, stxetx_frame_t source, uint32_t 
     // Data frame requires buffer of at least (6 + LEN) bytes
     if (n < 6 + source.len_bytes)
     {
-        return ERROR_BUFFER_TOO_SMALL;
+        return STXETX_ERROR_BUFFER_TOO_SMALL;
     }
 
     if (source.len_bytes != 0 && NULL == source.p_payload)
     {
-        return ERROR_INVALID_HANDLE;
+        return STXETX_ERROR_INVALID_HANDLE;
     }
     
     uint8_t* ptr = p_dest_buffer;
@@ -141,7 +141,7 @@ uint8_t stxetx_encode_n(uint8_t* p_dest_buffer, stxetx_frame_t source, uint32_t 
         *p_bytes_written =  (uint8_t)(ptr - p_dest_buffer);
     }
 
-    return ERROR_NO_ERROR;
+    return STXETX_ERROR_NO_ERROR;
 
 }
 
@@ -156,13 +156,13 @@ uint8_t stxetx_decode_n(
 {
     if (NULL == p_src_buffer || NULL == p_dest_obj)
     {
-        return ERROR_INVALID_HANDLE;
+        return STXETX_ERROR_INVALID_HANDLE;
     }
 
     // Frame requires buffer of at least 6 bytes
     if (n_src < 6)
     {
-        return ERROR_BUFFER_TOO_SMALL;
+        return STXETX_ERROR_BUFFER_TOO_SMALL;
     }
 
     // Iterator (starts at the first frame data byte, right after STX)
@@ -171,7 +171,7 @@ uint8_t stxetx_decode_n(
     // Check if first byte is STX
     if (*(ptr++) != ASCII_STX)
     {
-        return ERROR_INVALID_FRAME;
+        return STXETX_ERROR_INVALID_FRAME;
     }
     
     ptr = read_byte_from_buffer_(ptr, &(p_dest_obj->msg_type));
@@ -203,12 +203,12 @@ uint8_t stxetx_decode_n(
     // Check if last byte is ETX
     if (*(ptr++) != ASCII_ETX)
     {
-        return ERROR_INVALID_FRAME;
+        return STXETX_ERROR_INVALID_FRAME;
     }
 
     // TODO: Checksum
 
-    return ERROR_NO_ERROR;
+    return STXETX_ERROR_NO_ERROR;
 }
 
 
@@ -216,7 +216,7 @@ uint8_t stxetx_init_empty_frame(stxetx_frame_t* p_frame)
 {
     if (NULL == p_frame)
     {
-        return ERROR_INVALID_HANDLE;
+        return STXETX_ERROR_INVALID_HANDLE;
     }
 
     p_frame->msg_type = -1;
@@ -225,7 +225,7 @@ uint8_t stxetx_init_empty_frame(stxetx_frame_t* p_frame)
     p_frame->p_payload = NULL;
     p_frame->checksum = 0;
 
-    return ERROR_NO_ERROR;
+    return STXETX_ERROR_NO_ERROR;
 }
 
 
@@ -233,7 +233,7 @@ uint8_t stxetx_add_payload(stxetx_frame_t* p_frame, uint8_t* p_payload, uint8_t 
 {
     if (NULL == p_frame || NULL == p_payload)
     {
-        return ERROR_INVALID_HANDLE;
+        return STXETX_ERROR_INVALID_HANDLE;
     }
 
     if (n < 1)
@@ -241,11 +241,11 @@ uint8_t stxetx_add_payload(stxetx_frame_t* p_frame, uint8_t* p_payload, uint8_t 
         p_frame->len_bytes = 0;
         p_frame->p_payload = NULL;
 
-        return ERROR_BUFFER_TOO_SMALL;
+        return STXETX_ERROR_BUFFER_TOO_SMALL;
     }
 
     p_frame->len_bytes = n;
     p_frame->p_payload = p_payload;
 
-    return ERROR_NO_ERROR;
+    return STXETX_ERROR_NO_ERROR;
 }
