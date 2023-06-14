@@ -25,9 +25,9 @@ typedef enum {
 
 typedef enum {
     ERROR_NO_ERROR = 0,
-    ERROR_INVALID_HANDLE = 1,
-    ERROR_BUFFER_TOO_SMALL = 2,
-    ERROR_INVALID_FRAME = 3
+    ERROR_INVALID_HANDLE = 10,
+    ERROR_BUFFER_TOO_SMALL = 11,
+    ERROR_INVALID_FRAME = 12
 } error_code_e;
 
 /* ************************************************************ */

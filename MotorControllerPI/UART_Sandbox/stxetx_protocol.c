@@ -100,14 +100,26 @@ uint8_t stxetx_encode_n(uint8_t* p_dest_buffer, stxetx_frame_t source, uint32_t 
 
     ptr = write_byte_to_buffer_(ptr, source.msg_type);
     ptr = write_byte_to_buffer_(ptr, source.flags);
-    ptr = write_byte_to_buffer_(ptr, source.len_bytes);
+	
+	// Since payload length has to be calculated after writing
+	// payload, because length can be a special character (STX, ETX, ESC)
+	// Preemptively escape length field (has no effect other than adding another byte)
+	(*ptr++) = ASCII_ESCAPE;
+	// Write 0 to length field and save iterator to length field
+	uint8_t* it_length_field = ptr;
+    ptr = write_byte_to_buffer_(ptr, 0x00);
 
+	uint8_t* it_payload_begin = ptr;
     for (uint32_t i = 0; i < source.len_bytes; i++)
     {
         ptr = write_byte_to_buffer_(ptr, source.p_payload[i]);
     }
-
-    ptr += source.len_bytes;
+	
+	// After adding escapes
+	uint8_t actual_payload_length = (uint8_t)(unsigned)(ptr - it_payload_begin);
+	*it_length_field = actual_payload_length;
+	
+    //ptr += source.len_bytes;
 
     if (source.flags & FLAG_IGNORE_CHECKSUM)
     {
@@ -170,11 +182,16 @@ uint8_t stxetx_decode_n(
     {
         p_dest_obj->p_payload = p_payload_buffer;
         
-        uint8_t* ptr_payload = p_payload_buffer;
+        uint8_t* it_payload = p_payload_buffer;
+		uint8_t* it_payload_begin = it_payload;
         for (uint32_t i = 0; i < p_dest_obj->len_bytes; i++)
         {
-            ptr = read_byte_from_buffer_(ptr, ptr_payload++);
+            ptr = read_byte_from_buffer_(ptr, it_payload++);
         }
+		
+		// After removing escapes
+		uint8_t actual_payload_size = (uint8_t)(unsigned)(it_payload - it_payload_begin);
+		p_dest_obj->len_bytes = actual_payload_size;
     }
     else
     {
