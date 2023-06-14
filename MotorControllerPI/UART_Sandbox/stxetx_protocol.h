@@ -31,7 +31,8 @@ typedef enum {
     STXETX_ERROR_NO_ERROR = 0,
     STXETX_ERROR_INVALID_HANDLE = 10,
     STXETX_ERROR_BUFFER_TOO_SMALL = 11,
-    STXETX_ERROR_INVALID_FRAME = 12
+    STXETX_ERROR_STX_MISSING = 12,
+	STXETX_ERROR_ETX_MISSING = 13
 } stxetx_error_code_e;
 
 /* ************************************************************ */

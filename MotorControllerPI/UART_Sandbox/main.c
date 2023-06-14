@@ -362,20 +362,17 @@ PRIVATE void do_parse_command(void)
 	
 	if (status != STXETX_ERROR_NO_ERROR)
 	{
-		if (status == STXETX_ERROR_BUFFER_TOO_SMALL)
-		{
-			stxetx_frame_t frame;
-			stxetx_init_empty_frame(&frame);
-			frame.msg_type = 1;
-			frame.flags = 0;
-			frame.checksum = 0;
-			//stxetx_add_payload(&frame, g_frame_buffer, g_frame_buffer_length);
-			
-			uint8_t p_data[64] = {0};
-			uint32_t bytes_written = 0;
-			stxetx_encode_n(p_data, frame, 64, &bytes_written);
-			usart_send(p_data, bytes_written);
-		}
+		stxetx_frame_t frame;
+		stxetx_init_empty_frame(&frame);
+		frame.msg_type = 1;
+		frame.flags = 0;
+		frame.checksum = 0;
+		stxetx_add_payload(&frame, g_frame_buffer, g_frame_buffer_length);
+		
+		uint8_t p_data[64] = {0};
+		uint32_t bytes_written = 0;
+		stxetx_encode_n(p_data, frame, 64, &bytes_written);
+		usart_send(p_data, bytes_written);
 		// Error State:
 		// TODO: Write to EEPROM
 		do_handle_fatal_error_with_error_code(status);
