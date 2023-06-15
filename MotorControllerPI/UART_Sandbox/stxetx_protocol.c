@@ -82,10 +82,10 @@ uint8_t stxetx_encode_n(uint8_t* p_dest_buffer, stxetx_frame_t source, uint32_t 
 	}
 
 	// Data frame requires buffer of at least (6 + LEN) bytes
-	if (n < 6 + source.len_bytes)
-	{
-		return STXETX_ERROR_BUFFER_TOO_SMALL;
-	}
+	//if (n < 6 + source.len_bytes)
+	//{
+		//return STXETX_ERROR_BUFFER_TOO_SMALL;
+	//}
 
 	if (source.len_bytes != 0 && NULL == source.p_payload)
 	{
@@ -145,7 +145,7 @@ uint8_t stxetx_encode_n(uint8_t* p_dest_buffer, stxetx_frame_t source, uint32_t 
 
 }
 
-
+// TODO: Add guards (n_payload currently unused)
 uint8_t stxetx_decode_n(
 uint8_t* p_src_buffer,
 stxetx_frame_t* p_dest_obj,
@@ -160,10 +160,10 @@ uint8_t n_payload
 	}
 
 	// Frame requires buffer of at least 6 bytes
-	if (n_src < 6)
-	{
-		return STXETX_ERROR_BUFFER_TOO_SMALL;
-	}
+	//if (n_src < 6)
+	//{
+		//return STXETX_ERROR_BUFFER_TOO_SMALL;
+	//}
 
 	// Iterator (starts at the first frame data byte, right after STX)
 	uint8_t* ptr = p_src_buffer;
@@ -189,6 +189,7 @@ uint8_t n_payload
 		uint8_t* it_write_payload = p_payload_buffer;
 		uint8_t* it_write_payload_begin = it_write_payload;
 		
+		// TODO: Add guards (n_payload currently unused)
 		uint8_t* it_read_payload_end = ptr + payload_length_bytes;
 		while (ptr != it_read_payload_end)
 		{

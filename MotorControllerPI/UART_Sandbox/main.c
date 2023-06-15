@@ -143,17 +143,31 @@ PRIVATE volatile uint32_t g_command_timer_pids;
 // and that main loop should parse it.
 PRIVATE volatile uint8_t g_flag_frame_awaits_decoding = 0;
 
-// Size of receiving command buffer in bytes
-#define COMMAND_BUFFER_SIZE 32
+// Flag that indicates command (in form of a stxetx_frame_t g_received_frame)
+// is ready to be processed
+PRIVATE volatile uint8_t g_flag_command_in_queue = 0;
+
+// Size of receiving frame buffer used to serialize and send frame, in bytes
+#define FRAME_ENCODE_BUFFER_SIZE 32
+// Size of receiving frame buffer used to deserialize frame from receive buffer, in bytes
+#define FRAME_DECODE_BUFFER_SIZE 32
 // See STXETX stxetx_decode_n function description
 #define PAYLOAD_BUFFER_SIZE 64
 
-// Command buffer that holds received raw command from UART.
-// Will be extended to an array in future.
-PRIVATE volatile uint8_t g_frame_buffer[COMMAND_BUFFER_SIZE] = {0};
+// Received and decoded STXETX frame.
+PRIVATE volatile stxetx_frame_t g_received_frame;
 
-// Number of bytes written to g_frame_buffer
-PRIVATE volatile uint8_t g_frame_buffer_length = 0;
+// Frame buffer that holds *one full* received raw frame from UART.
+PRIVATE volatile uint8_t g_frame_decode_buffer[FRAME_DECODE_BUFFER_SIZE] = {0};
+
+// Number of bytes written to g_frame_decode_buffer
+PRIVATE volatile uint8_t g_frame_decode_buffer_length = 0;
+
+// Frame buffer that holds encoded frame to be sent over UART.
+PRIVATE volatile uint8_t g_frame_encode_buffer[FRAME_DECODE_BUFFER_SIZE] = {0};
+
+// Number of bytes written in g_frame_encode_buffer
+PRIVATE volatile uint8_t g_frame_encode_buffer_length = 0;
 
 // Flag that indicated that current command is being executed.
 PRIVATE volatile uint8_t g_flag_command_running = 0;
@@ -161,6 +175,7 @@ PRIVATE volatile uint8_t g_flag_command_running = 0;
 PRIVATE volatile command_receiver_state_e g_frame_receiver_state = CMD_RCV_IDLE;
 
 #define RECEIVE_BUFFER_SIZE 64
+
 PRIVATE volatile uint8_t g_receive_buffer_internal_[RECEIVE_BUFFER_SIZE] = {0};
 PRIVATE volatile circular_buffer_t g_receive_buffer;
 
@@ -276,6 +291,29 @@ PRIVATE void _usart_send_big_endian(unsigned char* pData, int length)
 	}
 }
 
+PRIVATE void usart_send_frame(stxetx_frame_t frame)
+{
+	memset(g_frame_encode_buffer, 0, FRAME_ENCODE_BUFFER_SIZE);
+	
+	uint8_t frame_size = 0;
+	
+	uint8_t ec = stxetx_encode_n(
+		g_frame_encode_buffer,
+		frame,
+		frame_size,
+		&frame_size
+	);
+	
+	if (ec != STXETX_ERROR_NO_ERROR)
+	{
+		do_handle_fatal_error_with_error_code(ec);
+	}
+	
+	g_frame_encode_buffer_length = frame_size;
+	
+	usart_send(g_frame_encode_buffer, g_frame_encode_buffer_length);
+}
+
 PRIVATE void setup_pid_timer(void)
 {
 	// If we want timer to interrupt every T seconds, we must set compare register
@@ -339,7 +377,7 @@ PRIVATE void setup_usart_receive(void)
 	}
 }
 
-PRIVATE void do_parse_command(void)
+PRIVATE void do_execute_command(void)
 {		
 	// Ignore new command while current is being executed
 	if(g_flag_command_running)
@@ -349,37 +387,20 @@ PRIVATE void do_parse_command(void)
 	
 	command_e command = COMMAND_UNKNOWN;
 	
-	uint8_t payload_buffer[PAYLOAD_BUFFER_SIZE] = {0};
-	stxetx_frame_t command_frame;
-	stxetx_init_empty_frame(&command_frame);
-	uint8_t status = stxetx_decode_n(
-		g_frame_buffer,
-		&command_frame,
-		g_frame_buffer_length,
-		payload_buffer,
-		PAYLOAD_BUFFER_SIZE
-	);
+	do_blink_debug_led_times(g_received_frame.msg_type);
 	
-	if (status != STXETX_ERROR_NO_ERROR)
-	{
-		stxetx_frame_t frame;
-		stxetx_init_empty_frame(&frame);
-		frame.msg_type = 1;
-		frame.flags = 0;
-		frame.checksum = 0;
-		stxetx_add_payload(&frame, g_frame_buffer, g_frame_buffer_length);
-		
-		uint8_t p_data[64] = {0};
-		uint32_t bytes_written = 0;
-		stxetx_encode_n(p_data, frame, 64, &bytes_written);
-		usart_send(p_data, bytes_written);
-		// Error State:
-		// TODO: Write to EEPROM
-		do_handle_fatal_error_with_error_code(status);
-		return;
-	}
+	stxetx_frame_t frame;
+	stxetx_init_empty_frame(&frame);
 	
-	do_blink_debug_led_times(command_frame.msg_type);
+	frame.msg_type = 15;
+	frame.flags |= FLAG_SHOULD_ACK;
+	frame.checksum = 0;
+	
+	const char* p_msg_format = "Received MSG_TYPE = %d";
+	char p_message_data[64] = {0};
+	snprintf(p_message_data, 64, p_msg_format, g_received_frame.msg_type);
+	stxetx_add_payload(&frame, p_message_data, strlen(p_message_data));
+	usart_send_frame(frame);
 	
 	//switch(command_frame.msg_type)
 	//{
@@ -419,13 +440,13 @@ PRIVATE void do_on_command_complete(void)
 
 PRIVATE inline void command_buffer_write_byte(uint8_t data_byte)
 {
-	g_frame_buffer[g_frame_buffer_length++] = data_byte;
+	g_frame_decode_buffer[g_frame_decode_buffer_length++] = data_byte;
 }
 
 PRIVATE void clear_command_buffer()
 {
-	g_frame_buffer_length = 0;
-	memset(g_frame_buffer, 0, COMMAND_BUFFER_SIZE);
+	g_frame_decode_buffer_length = 0;
+	memset(g_frame_decode_buffer, 0, FRAME_DECODE_BUFFER_SIZE);
 }
 
 void do_on_command_byte_received(uint8_t byte_received)
@@ -465,7 +486,7 @@ void do_on_command_byte_received(uint8_t byte_received)
 				// Detected unescaped STX character in middle of a frame
 				goto error;
 			}
-			else if(g_frame_buffer_length < COMMAND_BUFFER_SIZE)
+			else if(g_frame_decode_buffer_length < FRAME_DECODE_BUFFER_SIZE)
 			{
 				command_buffer_write_byte(byte_received);
 			}
@@ -477,7 +498,7 @@ void do_on_command_byte_received(uint8_t byte_received)
 			}
 		break;
 		case CMD_RCV_ESCAPE_ACTIVE:
-			if (g_frame_buffer_length < COMMAND_BUFFER_SIZE)
+			if (g_frame_decode_buffer_length < FRAME_DECODE_BUFFER_SIZE)
 			{
 				command_buffer_write_byte(byte_received);
 				g_frame_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
@@ -505,6 +526,28 @@ error:
 	g_frame_receiver_state = CMD_RCV_IDLE;
 	clear_command_buffer();
 	return;
+}
+
+PRIVATE void do_parse_received_frame(void)
+{
+	uint8_t payload_buffer[PAYLOAD_BUFFER_SIZE] = {0};
+	stxetx_init_empty_frame(&g_received_frame);
+	
+	uint8_t status = stxetx_decode_n(
+		g_frame_decode_buffer,
+		&g_received_frame,
+		g_frame_decode_buffer_length,
+		payload_buffer,
+		PAYLOAD_BUFFER_SIZE
+	);
+	
+	if (status != STXETX_ERROR_NO_ERROR)
+	{
+		// Error State:
+		// TODO: Write to EEPROM
+		do_handle_fatal_error_with_error_code(status);
+		return;
+	}
 }
 
 
@@ -546,12 +589,20 @@ int main(void)
 			}
 		}
 
-		if(g_flag_frame_awaits_decoding)
+		if(g_flag_frame_awaits_decoding && !g_flag_command_in_queue)
 		{
 			// TODO: do not set command running flag on unknown command
-			do_parse_command();
+			
+			do_parse_received_frame();
 			g_flag_frame_awaits_decoding = 0;
+			g_flag_command_in_queue = 1;
 			g_frame_receiver_state = CMD_RCV_IDLE;
+		}
+		
+		if (g_flag_command_in_queue)
+		{
+			do_execute_command();
+			g_flag_command_in_queue = 0;
 		}
 		
 		if(g_flag_command_running /* && g_command_timer_pids >= command_duration_pids */)
@@ -584,7 +635,7 @@ ISR(USART_RX_vect)
 {
 	if (IS_BIT_SET(UCSR0A, RXC0) && !g_flag_command_running)
 	{
-		//g_frame_buffer = UDR0;
+		//g_frame_decode_buffer = UDR0;
 		//g_flag_frame_awaits_decoding = 1;
 		uint8_t byte_received = UDR0;
 		
