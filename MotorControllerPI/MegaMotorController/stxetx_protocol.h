@@ -13,6 +13,10 @@
 
 /* ************************************************************ */
 
+#ifdef __cplusplus
+	extern "C" {
+#endif
+
 typedef enum {
     MSG_TYPE_EMPTY = -1,
     MSG_TYPE_ACK = 1,
@@ -24,11 +28,12 @@ typedef enum {
 } msg_type_e;
 
 typedef enum {
-    ERROR_NO_ERROR = 0,
-    ERROR_INVALID_HANDLE = 1,
-    ERROR_BUFFER_TOO_SMALL = 2,
-    ERROR_INVALID_FRAME = 3
-} error_code_e;
+    STXETX_ERROR_NO_ERROR = 0,
+    STXETX_ERROR_INVALID_HANDLE = 10,
+    STXETX_ERROR_BUFFER_TOO_SMALL = 11,
+    STXETX_ERROR_STX_MISSING = 12,
+	STXETX_ERROR_ETX_MISSING = 13
+} stxetx_error_code_e;
 
 /* ************************************************************ */
 
@@ -79,5 +84,9 @@ uint8_t stxetx_add_payload(stxetx_frame_t* p_frame, uint8_t* p_payload, uint8_t 
 uint8_t stxetx_is_character_escape(uint8_t character);
 uint8_t stxetx_is_character_frame_start_delimiter(uint8_t character);
 uint8_t stxetx_is_character_frame_end_delimiter(uint8_t character);
+
+#ifdef __cplusplus
+	}
+#endif
 
 #endif

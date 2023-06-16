@@ -1,5 +1,5 @@
 /*
- * DuoMotorControllerPI.c
+ * MegaMotorControllerPI.c
  *
  * Created: 5/27/2023 7:17:33 PM
  * Author : KASO
@@ -25,6 +25,7 @@
 #include "utils_bitops.h"
 #include "util_pindefs.h"
 #include "stxetx_protocol.h"
+#include "circular_buffer.h"					
 
 
 /*
@@ -224,7 +225,9 @@ typedef enum {
 #define PULSES_PER_ROTATION 245
 
 // Baud rate = 115.2kbps; U2X=0
-#define BAUD_RATE_UBBR_115_2_KBPS 8
+//#define BAUD_RATE_UBBR_115_2_KBPS 8
+#define BAUD_RATE_UBBR_9_6_KBPS 103
+#define BAUD_RATE_UBBR_115_2_KBPS BAUD_RATE_UBBR_9_6_KBPS
 
 // Defines maximum "believable" RPS value
 // All RPS values above RPS_UPPER_DISCARD_LIMIT
@@ -270,29 +273,47 @@ PRIVATE volatile uint32_t g_command_timer_pids;
 
 // Flag that indicates that there is a command in command buffer,
 // and that main loop should parse it.
-PRIVATE volatile uint8_t g_flag_command_received = 0;
+PRIVATE volatile uint8_t g_flag_frame_awaits_decoding = 0;
 
-// Size of receiving command buffer in bytes
-#define COMMAND_BUFFER_SIZE 64
+// Flag that indicates command (in form of a stxetx_frame_t g_received_frame)
+// is ready to be processed
+PRIVATE volatile uint8_t g_flag_command_in_queue = 0;
+
+// Size of receiving frame buffer used to serialize and send frame, in bytes
+#define FRAME_ENCODE_BUFFER_SIZE 32
+// Size of receiving frame buffer used to deserialize frame from receive buffer, in bytes
+#define FRAME_DECODE_BUFFER_SIZE 32
 // See STXETX stxetx_decode_n function description
 #define PAYLOAD_BUFFER_SIZE 64
 
-// Command buffer that holds received raw command from UART.
-// Will be extended to an array in future.
-PRIVATE volatile uint8_t g_command_buffer[COMMAND_BUFFER_SIZE] = {0};
+// Received and decoded STXETX frame.
+PRIVATE volatile stxetx_frame_t g_received_frame;
 
-// Number of bytes received in g_command_buffer
-PRIVATE volatile uint8_t g_command_bytes_received = 0;
+// Frame buffer that holds *one full* received raw frame from UART.
+PRIVATE volatile uint8_t g_frame_decode_buffer[FRAME_DECODE_BUFFER_SIZE] = {0};
+
+// Number of bytes written to g_frame_decode_buffer
+PRIVATE volatile uint8_t g_frame_decode_buffer_length = 0;
+
+// Frame buffer that holds encoded frame to be sent over UART.
+										  
+PRIVATE volatile uint8_t g_frame_encode_buffer[FRAME_DECODE_BUFFER_SIZE] = {0};
+
+// Number of bytes written in g_frame_encode_buffer
+PRIVATE volatile uint8_t g_frame_encode_buffer_length = 0;
 
 // Flag that indicated that current command is being executed.
 PRIVATE volatile uint8_t g_flag_command_running = 0;
 
-PRIVATE volatile command_receiver_state_e g_command_receiver_state = CMD_RCV_IDLE;
+PRIVATE volatile command_receiver_state_e g_frame_receiver_state = CMD_RCV_IDLE;
 
 #define RECEIVE_BUFFER_SIZE 64
-PRIVATE volatile uint8_t g_receive_buffer[RECEIVE_BUFFER_SIZE] = {0};
-PRIVATE volatile uint8_t g_bytes_in_rx_buffer = 0;
-PRIVATE volatile uint8_t g_command_bytes_processed = 0;
+																	 
+												  
+													   
+
+PRIVATE volatile uint8_t g_receive_buffer_internal_[RECEIVE_BUFFER_SIZE] = {0};
+PRIVATE volatile circular_buffer_t g_receive_buffer;
 
 
 /*
@@ -355,15 +376,30 @@ PRIVATE void do_handle_fatal_error(void)
 	}
 }
 
+PRIVATE void do_handle_fatal_error_with_error_code(uint8_t error_code)
+{
+	const int flutter_half_period_ms = 50;
+	const int flutter_duration_ms = 2000;
+	const int error_code_flutter_delay_ms = 1000;
+	// Signal fatal error with debug LED blinking
+	while(1)
+	{
+		for (int i = 0; i < flutter_duration_ms/flutter_half_period_ms; i++)
+		{
+			debug_led_toggle();
+			_delay_ms(50);
+		}
+		
+		debug_led_off();
+		
+		_delay_ms(error_code_flutter_delay_ms);
+		do_blink_debug_led_times(error_code);
+		_delay_ms(error_code_flutter_delay_ms);
+	}
+}																  
 // Assumes little-endianness
 PRIVATE void _usart_send_little_endian(unsigned char* pData, int length)
 {
-	// Send STX (Start Byte)
-	while (!IS_BIT_SET(UCSR0A, UDRE0))
-	{
-		;
-	}
-	UDR0 = 0x02;
 	
 	// Send Data
 	int i;
@@ -380,12 +416,6 @@ PRIVATE void _usart_send_little_endian(unsigned char* pData, int length)
 // Assumes big-endianness
 PRIVATE void _usart_send_big_endian(unsigned char* pData, int length)
 {
-	// Send STX (Start Byte)
-	while (!IS_BIT_SET(UCSR0A, UDRE0))
-	{
-		;
-	}
-	UDR0 = 0x02;
 	
 	// Send Data
 	int i;
@@ -397,6 +427,27 @@ PRIVATE void _usart_send_big_endian(unsigned char* pData, int length)
 		}
 		UDR0 = pData[i];
 	}
+}
+PRIVATE void usart_send_frame(stxetx_frame_t frame)
+{
+	memset(g_frame_encode_buffer, 0, FRAME_ENCODE_BUFFER_SIZE);
+
+	uint8_t frame_size = 0;
+
+	uint8_t ec = stxetx_encode_n(
+		g_frame_encode_buffer,
+		frame,
+		frame_size,
+		&frame_size
+	);
+	
+	if (ec != STXETX_ERROR_NO_ERROR)				
+	{
+		do_handle_fatal_error_with_error_code(ec);
+	}
+	
+	g_frame_encode_buffer_length = frame_size;
+	usart_send(g_frame_encode_buffer, g_frame_encode_buffer_length);
 }
 
 PRIVATE inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder)
@@ -764,7 +815,12 @@ PRIVATE void setup_usart_receive(void)
 	// Enable RX interrupt
 	SET_BIT(UCSR0B, RXCIE0);
 
-
+	// Setup receive buffer
+	uint8_t error = CBuf_Init(&g_receive_buffer, g_receive_buffer_internal_, RECEIVE_BUFFER_SIZE);
+	if(error != CBUF_ERROR_NO_ERROR)
+	{
+		do_handle_fatal_error_with_error_code(error);
+	}
 }
 
 PRIVATE void setup_PID(void)
@@ -855,68 +911,59 @@ PRIVATE void do_advance_pids(void)
 	
 }
 
-PRIVATE void do_parse_command(void)
-{
+PRIVATE void do_execute_command(void)
+{		
 	// Ignore new command while current is being executed
 	if(g_flag_command_running)
 	{
 		return;
 	}	
 	
-	// Set motor speeds
-	g_motor_1.setpoint = motor_on_rps;
-	g_motor_2.setpoint = motor_on_rps;
-	g_motor_3.setpoint = motor_on_rps;
-	
 	command_e command = COMMAND_UNKNOWN;
 	
-	uint8_t payload_buffer[PAYLOAD_BUFFER_SIZE] = {0};
-	stxetx_frame_t command_frame;
-	stxetx_init_empty_frame(&command_frame);
-	uint8_t status = stxetx_decode_n(
-		g_command_buffer,
-		&command_frame,
-		g_command_bytes_received,
-		payload_buffer,
-		PAYLOAD_BUFFER_SIZE
-	);
+	do_blink_debug_led_times(g_received_frame.msg_type);
 	
-	if (status != ERROR_NO_ERROR)
-	{
-		// Error State:
-		// TODO: Write to EEPROM
-		return;
-	}
+	stxetx_frame_t frame;
+	stxetx_init_empty_frame(&frame);
 	
-	switch(command_frame.msg_type)
-	{
-		case MSG_TYPE_GO_FORWARD:
-		command = COMMAND_FORWARD;
+	frame.msg_type = 15;
+	frame.flags |= FLAG_SHOULD_ACK;
+	frame.checksum = 0;
+	
+	const char* p_msg_format = "Received MSG_TYPE = %d";
+	char p_message_data[64] = {0};
+	snprintf(p_message_data, 64, p_msg_format, g_received_frame.msg_type);
+	stxetx_add_payload(&frame, p_message_data, strlen(p_message_data));
+	usart_send_frame(frame);
+	
+	//switch(command_frame.msg_type)
+	//{
+		//case MSG_TYPE_GO_FORWARD:
+		//command = COMMAND_FORWARD;
 		//do_blink_debug_led_times(1);
-		break;
-		case MSG_TYPE_GO_BACKWARD:
-		command = COMMAND_BACKWARD;
+		//break;
+		//case MSG_TYPE_GO_BACKWARD:
+		//command = COMMAND_BACKWARD;
 		//do_blink_debug_led_times(2);
-		break;
-		case MSG_TYPE_ROTATE_LEFT:
-		command = COMMAND_LEFT;
+		//break;
+		//case MSG_TYPE_ROTATE_LEFT:
+		//command = COMMAND_LEFT;
 		//do_blink_debug_led_times(3);
-		break;
-		case MSG_TYPE_ROTATE_RIGHT:
-		command = COMMAND_RIGHT;
+		//break;
+		//case MSG_TYPE_ROTATE_RIGHT:
+		//command = COMMAND_RIGHT;
 		//do_blink_debug_led_times(4);
-		break;
-		case MSG_TYPE_STOP:
-		command = COMMAND_STOP;
-		break;
-		default:
-		command = COMMAND_UNKNOWN;
+		//break;
+		//case MSG_TYPE_STOP:
+		//command = COMMAND_STOP;
 		//do_blink_debug_led_times(5);
-		break;
-	}
-
-	set_motor_direction(command);
-	
+		//break;
+		//default:
+		//command = COMMAND_UNKNOWN;
+		//do_blink_debug_led_times(6);
+		//break;
+	//}
+	//
 	g_flag_command_running = 1;
 }
 
@@ -941,81 +988,81 @@ PRIVATE void do_on_command_complete(void)
 
 PRIVATE inline void command_buffer_write_byte(uint8_t data_byte)
 {
-	g_command_buffer[g_command_bytes_received++] = data_byte;
+	g_frame_decode_buffer[g_frame_decode_buffer_length++] = data_byte;
 }
 
 PRIVATE inline void clear_command_buffer()
 {
-	g_command_bytes_received = 0;
-	memset(g_command_buffer, 0, COMMAND_BUFFER_SIZE);
+	g_frame_decode_buffer_length = 0;
+	memset(g_frame_decode_buffer, 0, FRAME_DECODE_BUFFER_SIZE);
 }
 
-PRIVATE void clear_rx_buffer()
-{
-	g_command_bytes_processed = 0;
-	g_bytes_in_rx_buffer = 0;
-	memset(g_receive_buffer, 0, RECEIVE_BUFFER_SIZE);
-}
 
 void do_on_command_byte_received(uint8_t byte_received)
 {
-	switch (g_command_receiver_state)
+	switch (g_frame_receiver_state)
 	{
 		case CMD_RCV_IDLE:
-		if(stxetx_is_character_frame_start_delimiter(byte_received))
-		{
-			clear_command_buffer();
-			command_buffer_write_byte(byte_received);
-			g_command_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
-		}
-		else
-		{
-			// Error state:
-			// Invalid character received, expected STX character
-			// TODO Write error data to EEPROM
-			goto error;
-		}
+			if(stxetx_is_character_frame_start_delimiter(byte_received))
+			{
+				clear_command_buffer();
+				command_buffer_write_byte(byte_received);
+				g_frame_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
+			}
+			else
+			{
+				// Error state:
+				// Invalid character received, expected STX character
+				// TODO Write error data to EEPROM
+				goto error;
+			}
 		break;
 		case CMD_RCV_RECEIVING_IN_PROCESS:
-		if (stxetx_is_character_frame_end_delimiter(byte_received))
-		{
-			command_buffer_write_byte(byte_received);
-			clear_rx_buffer();
-			g_command_receiver_state = CMD_RCV_FULL_FRAME_READ;
-			g_flag_command_received = 1;
-		}
-		else if(stxetx_is_character_escape(byte_received))
-		{
-			g_command_receiver_state = CMD_RCV_ESCAPE_ACTIVE;
-		}
-		else if(g_command_bytes_received < COMMAND_BUFFER_SIZE)
-		{
-			command_buffer_write_byte(byte_received);
-		}
-		else
-		{
-			// Error state:
-			// Buffer Overflowed
-			goto error;
-		}
+			if (stxetx_is_character_frame_end_delimiter(byte_received))
+			{
+				command_buffer_write_byte(byte_received);
+				g_frame_receiver_state = CMD_RCV_FULL_FRAME_READ;
+				g_flag_frame_awaits_decoding = 1;
+			}
+			else if(stxetx_is_character_escape(byte_received))
+			{
+				command_buffer_write_byte(byte_received);
+				g_frame_receiver_state = CMD_RCV_ESCAPE_ACTIVE;
+			}
+			else if(stxetx_is_character_frame_start_delimiter(byte_received))
+			{
+				// Error state:
+				// Detected unescaped STX character in middle of a frame
+				goto error;
+			}
+			else if(g_frame_decode_buffer_length < FRAME_DECODE_BUFFER_SIZE)
+			{
+				command_buffer_write_byte(byte_received);
+			}
+			else
+			{
+				// Error state:
+				// Buffer Overflowed
+				goto error;
+			}
 		break;
 		case CMD_RCV_ESCAPE_ACTIVE:
-		if (g_command_bytes_received < COMMAND_BUFFER_SIZE)
-		{
-			command_buffer_write_byte(byte_received);
-			g_command_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
-		}
-		else
-		{
-			// Error state:
-			// Buffer Overflowed
-			goto error;
-		}
+			if (g_frame_decode_buffer_length < FRAME_DECODE_BUFFER_SIZE)
+			{
+				command_buffer_write_byte(byte_received);
+				g_frame_receiver_state = CMD_RCV_RECEIVING_IN_PROCESS;
+			}
+			else
+			{
+				// Error state:
+				// Buffer Overflowed
+				goto error;
+			}
 		break;
 		case CMD_RCV_FULL_FRAME_READ:
-		// Always an error case
-		// Should be reset externally after reading command
-		goto error;
+			// Always an error case
+			// Should be reset externally after reading command
+			goto error;
 		default:
 		// Error state:
 		// Unknown State
@@ -1024,12 +1071,33 @@ void do_on_command_byte_received(uint8_t byte_received)
 	
 	return;
 	
-	error:
-	g_command_receiver_state = CMD_RCV_IDLE;
+error:
+	g_frame_receiver_state = CMD_RCV_IDLE;
 	clear_command_buffer();
-	clear_rx_buffer();
 	return;
 }
+
+PRIVATE void do_parse_received_frame(void)
+{
+	uint8_t payload_buffer[PAYLOAD_BUFFER_SIZE] = {0};
+	stxetx_init_empty_frame(&g_received_frame);
+	
+	uint8_t status = stxetx_decode_n(
+		g_frame_decode_buffer,
+		&g_received_frame,
+		g_frame_decode_buffer_length,
+		payload_buffer,
+		PAYLOAD_BUFFER_SIZE
+	);
+	
+	if (status != STXETX_ERROR_NO_ERROR)
+	{
+		// Error State:
+		// TODO: Write to EEPROM
+		do_handle_fatal_error_with_error_code(status);
+		return;
+	}
+}								  
 
 
 int main(void)
@@ -1058,15 +1126,10 @@ int main(void)
 	g_motor_2.hall_encoder.current_rps = 0;
 	g_motor_3.hall_encoder.current_rps = 0;
 	
-	g_command_receiver_state = CMD_RCV_IDLE;
+	g_frame_receiver_state = CMD_RCV_IDLE;
 	
     while (1) 
     {
-		if(g_command_bytes_processed < g_bytes_in_rx_buffer && g_command_receiver_state != CMD_RCV_FULL_FRAME_READ)
-		{
-			do_on_command_byte_received(g_receive_buffer[g_command_bytes_processed++]);
-		}
-		
 		if(g_motor_1.hall_encoder.is_measurement_ready)
 		{
 			do_update_rps(&g_motor_1.hall_encoder);
@@ -1091,12 +1154,34 @@ int main(void)
 			g_flag_pid = 0;
 		}
 		
-		if(g_flag_command_received)
+		if(CBuf_AvailableForRead(g_receive_buffer) && g_frame_receiver_state != CMD_RCV_FULL_FRAME_READ)
+		{
+			uint8_t value;
+			uint8_t error = CBuf_Read(&g_receive_buffer, &value);
+			if (error == STXETX_ERROR_NO_ERROR)
+			{
+				do_on_command_byte_received(value);
+			}
+			else
+			{
+				do_handle_fatal_error_with_error_code(error);
+			}
+		}
+
+		if(g_flag_frame_awaits_decoding && !g_flag_command_in_queue)
 		{
 			// TODO: do not set command running flag on unknown command
-			do_parse_command();
-			g_flag_command_received = 0;
-			g_command_receiver_state = CMD_RCV_IDLE;
+			
+			do_parse_received_frame();
+			g_flag_frame_awaits_decoding = 0;
+			g_flag_command_in_queue = 1;
+			g_frame_receiver_state = CMD_RCV_IDLE;
+		}
+		
+		if (g_flag_command_in_queue)
+		{
+			do_execute_command();
+			g_flag_command_in_queue = 0;
 		}
 		
 		if(g_flag_command_running && g_command_timer_pids >= command_duration_pids)
@@ -1152,14 +1237,25 @@ ISR(USART0_RX_vect)
 {
 	if (IS_BIT_SET(UCSR0A, RXC0) && !g_flag_command_running)
 	{
-		//g_command_buffer = UDR0;
-		//g_flag_command_received = 1;
+		//g_frame_decode_buffer = UDR0;
+		//g_flag_frame_awaits_decoding = 1;
 		uint8_t byte_received = UDR0;
 		
 		// For some reason, MSB is always 1
-		byte_received &= 0x7F;
+		//byte_received &= 0x7F;
 		
-		g_receive_buffer[g_bytes_in_rx_buffer++] = byte_received;
+		uint8_t error = CBuf_Write(&g_receive_buffer, byte_received);
+		if (error != CBUF_ERROR_NO_ERROR)
+		{
+			do_handle_fatal_error_with_error_code(error);
+		}
+		
+		// // Loopback
+		//while (!IS_BIT_SET(UCSR0A, UDRE0))
+		//{
+			//;
+		//}
+		//UDR0 = byte_received;
 	}
 	else
 	{
