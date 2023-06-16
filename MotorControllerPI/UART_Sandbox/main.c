@@ -550,6 +550,37 @@ PRIVATE void do_parse_received_frame(void)
 	}
 }
 
+PRIVATE void do_broadcast_average_rps(void)
+{
+	// TODO: timestamp?
+	
+	const float motor_1_rps = 10.0f;
+	const float motor_2_rps = 15.0f;
+	const float motor_3_rps = 55.0f;
+	
+	stxetx_frame_t frame;
+	
+	stxetx_init_empty_frame(&frame);
+	
+	// const uint8_t payload_size = 3 * sizeof(float);
+	
+	//const uint8_t p_payload[payload_size] = {
+	const uint8_t p_payload[12] = {0};
+	
+	memcpy(p_payload + 0, (void*)&motor_1_rps, sizeof(float));
+	memcpy(p_payload + 4, (void*)&motor_2_rps, sizeof(float));
+	memcpy(p_payload + 8, (void*)&motor_3_rps, sizeof(float));
+	
+	//uint8_t ec = stxetx_add_payload(&frame, p_payload, payload_size);
+	uint8_t ec = stxetx_add_payload(&frame, p_payload, 12);
+	
+	if (ec != STXETX_ERROR_NO_ERROR)
+	{
+		do_handle_fatal_error_with_error_code(ec);
+	}
+	
+	usart_send_frame(frame);
+}
 
 int main(void)
 {
@@ -602,6 +633,7 @@ int main(void)
 		if (g_flag_command_in_queue)
 		{
 			do_execute_command();
+			do_broadcast_average_rps();
 			g_flag_command_in_queue = 0;
 		}
 		
