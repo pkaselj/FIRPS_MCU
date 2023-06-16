@@ -156,6 +156,12 @@
     <Compile Include="circular_buffer.h">
       <SubType>compile</SubType>
     </Compile>
+    <Compile Include="cma.c">
+      <SubType>compile</SubType>
+    </Compile>
+    <Compile Include="cma.h">
+      <SubType>compile</SubType>
+    </Compile>
     <Compile Include="main.c">
       <SubType>compile</SubType>
     </Compile>

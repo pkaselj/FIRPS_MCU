@@ -25,7 +25,8 @@
 #include "utils_bitops.h"
 #include "util_pindefs.h"
 #include "stxetx_protocol.h"
-#include "circular_buffer.h"					
+#include "circular_buffer.h"
+#include "cma.h"				
 
 
 /*
@@ -97,6 +98,7 @@ typedef struct {
 	uint32_t timer_value;
 	uint32_t buffered_timer_value;
 	float current_rps;
+	cumulative_moving_average_t average_rps;
 	uint8_t  is_measurement_ready;
 } hall_encoder_t;
 
@@ -240,6 +242,8 @@ typedef enum {
 //const uint32_t command_duration_pids = 188;
 PRIVATE const uint32_t command_duration_pids = 2*188;
 
+PRIVATE const uint32_t average_rps_broadcast_period_pids = 188;
+
 // Setpoint RPS (Revolutions Per Second) when motor is on
 PRIVATE const float motor_on_rps = 0.5f;
 
@@ -269,7 +273,7 @@ PRIVATE volatile uint8_t g_flag_pid = 0;
 // Incremented on each PID execution (when PID timer triggers)
 // Used to keep track of duration of current command (measured in
 // multiples of PID intervals, see 'command_duration_pids')
-PRIVATE volatile uint32_t g_command_timer_pids;
+PRIVATE volatile uint32_t g_pid_timer_trigger_count;
 
 // Flag that indicates that there is a command in command buffer,
 // and that main loop should parse it.
@@ -516,6 +520,10 @@ PRIVATE void set_motor_direction(command_e command)
 			SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
 			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
 			SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
+			
+			g_motor_1.setpoint = motor_on_rps;
+			g_motor_2.setpoint = motor_on_rps;
+			g_motor_3.setpoint = 0;
 		
 		break;
 		
@@ -524,6 +532,10 @@ PRIVATE void set_motor_direction(command_e command)
 			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
 			SET_MOTOR_DIRECTION_FORWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
 			SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
+			
+			g_motor_1.setpoint = motor_on_rps;
+			g_motor_2.setpoint = motor_on_rps;
+			g_motor_3.setpoint = 0;
 		break;
 		
 		case COMMAND_LEFT:
@@ -531,6 +543,10 @@ PRIVATE void set_motor_direction(command_e command)
 			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
 			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
 			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
+			
+			g_motor_1.setpoint = motor_on_rps;
+			g_motor_2.setpoint = motor_on_rps;
+			g_motor_3.setpoint = motor_on_rps;
 		break;
 		
 		case COMMAND_RIGHT:
@@ -538,12 +554,20 @@ PRIVATE void set_motor_direction(command_e command)
 			SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
 			SET_MOTOR_DIRECTION_FORWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
 			SET_MOTOR_DIRECTION_FORWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
+			
+			g_motor_1.setpoint = motor_on_rps;
+			g_motor_2.setpoint = motor_on_rps;
+			g_motor_3.setpoint = motor_on_rps;
 		break;
 		
 		case COMMAND_STOP:
 			SET_MOTOR_DIRECTION_STOP(MOTOR_1_IN_A, MOTOR_1_IN_B);
 			SET_MOTOR_DIRECTION_STOP(MOTOR_2_IN_A, MOTOR_2_IN_B);
 			SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
+			
+			g_motor_1.setpoint = 0;
+			g_motor_2.setpoint = 0;
+			g_motor_3.setpoint = 0;
 		break;
 		
 		default:
@@ -752,6 +776,8 @@ PRIVATE void do_update_rps(hall_encoder_t* hEncoder)
 	{
 		hEncoder->current_rps = RPS_ALPHA * hEncoder->current_rps + (1-RPS_ALPHA) * new_rps;
 		//hEncoder->current_rps = new_rps;
+		
+		cma_feed_sample(&hEncoder->average_rps, new_rps);
 	}
 	
 	//usart_send((unsigned char*)&new_rps, sizeof(float));
@@ -913,67 +939,103 @@ PRIVATE void do_advance_pids(void)
 
 PRIVATE void do_execute_command(void)
 {		
-	// Ignore new command while current is being executed
-	if(g_flag_command_running)
-	{
-		return;
-	}	
+	//// Ignore new command while current is being executed
+	//if(g_flag_command_running)
+	//{
+		//return;
+	//}	
 	
 	command_e command = COMMAND_UNKNOWN;
 	
-	do_blink_debug_led_times(g_received_frame.msg_type);
+	//do_blink_debug_led_times(g_received_frame.msg_type);
+	
+	//stxetx_frame_t frame;
+	//stxetx_init_empty_frame(&frame);
+	//
+	//frame.msg_type = 15;
+	//frame.flags |= FLAG_SHOULD_ACK;
+	//frame.checksum = 0;
+	//
+	//const char* p_msg_format = "Received MSG_TYPE = %d";
+	//char p_message_data[64] = {0};
+	//snprintf(p_message_data, 64, p_msg_format, g_received_frame.msg_type);
+	//stxetx_add_payload(&frame, p_message_data, strlen(p_message_data));
+	//usart_send_frame(frame);
+	
+	switch(g_received_frame.msg_type)
+	{
+		case MSG_TYPE_GO_FORWARD:
+		command = COMMAND_FORWARD;
+		//do_blink_debug_led_times(1);
+		break;
+		case MSG_TYPE_GO_BACKWARD:
+		command = COMMAND_BACKWARD;
+		//do_blink_debug_led_times(2);
+		break;
+		case MSG_TYPE_ROTATE_LEFT:
+		command = COMMAND_LEFT;
+		//do_blink_debug_led_times(3);
+		break;
+		case MSG_TYPE_ROTATE_RIGHT:
+		command = COMMAND_RIGHT;
+		//do_blink_debug_led_times(4);
+		break;
+		case MSG_TYPE_STOP:
+		command = COMMAND_STOP;
+		//do_blink_debug_led_times(5);
+		break;
+		default:
+		command = COMMAND_UNKNOWN;
+		//do_blink_debug_led_times(6);
+		break;
+	}
+	
+	set_motor_direction(command);
+	
+	g_flag_command_running = 1;
+}
+
+PRIVATE void do_broadcast_average_rps(void)
+{
+	// TODO: timestamp?
+	
+	const float motor_1_rps = cma_get_value(&g_motor_1.hall_encoder.average_rps);
+	const float motor_2_rps = cma_get_value(&g_motor_2.hall_encoder.average_rps);
+	const float motor_3_rps = cma_get_value(&g_motor_3.hall_encoder.average_rps);
 	
 	stxetx_frame_t frame;
+	
 	stxetx_init_empty_frame(&frame);
 	
-	frame.msg_type = 15;
-	frame.flags |= FLAG_SHOULD_ACK;
-	frame.checksum = 0;
+	// const uint8_t payload_size = 3 * sizeof(float);
 	
-	const char* p_msg_format = "Received MSG_TYPE = %d";
-	char p_message_data[64] = {0};
-	snprintf(p_message_data, 64, p_msg_format, g_received_frame.msg_type);
-	stxetx_add_payload(&frame, p_message_data, strlen(p_message_data));
+	//const uint8_t p_payload[payload_size] = {
+	const uint8_t p_payload[12] = {0};
+		
+	memcpy(p_payload + 0, (void*)&motor_1_rps, sizeof(float));
+	memcpy(p_payload + 4, (void*)&motor_2_rps, sizeof(float));
+	memcpy(p_payload + 8, (void*)&motor_3_rps, sizeof(float));
+	
+	//uint8_t ec = stxetx_add_payload(&frame, p_payload, payload_size);
+	uint8_t ec = stxetx_add_payload(&frame, p_payload, 12);
+	
+	if (ec != STXETX_ERROR_NO_ERROR)
+	{
+		do_handle_fatal_error_with_error_code(ec);
+	}
+	
 	usart_send_frame(frame);
-	
-	//switch(command_frame.msg_type)
-	//{
-		//case MSG_TYPE_GO_FORWARD:
-		//command = COMMAND_FORWARD;
-		//do_blink_debug_led_times(1);
-		//break;
-		//case MSG_TYPE_GO_BACKWARD:
-		//command = COMMAND_BACKWARD;
-		//do_blink_debug_led_times(2);
-		//break;
-		//case MSG_TYPE_ROTATE_LEFT:
-		//command = COMMAND_LEFT;
-		//do_blink_debug_led_times(3);
-		//break;
-		//case MSG_TYPE_ROTATE_RIGHT:
-		//command = COMMAND_RIGHT;
-		//do_blink_debug_led_times(4);
-		//break;
-		//case MSG_TYPE_STOP:
-		//command = COMMAND_STOP;
-		//do_blink_debug_led_times(5);
-		//break;
-		//default:
-		//command = COMMAND_UNKNOWN;
-		//do_blink_debug_led_times(6);
-		//break;
-	//}
-	//
-	g_flag_command_running = 1;
 }
 
 PRIVATE void do_on_command_complete(void)
 {
 	//set_motor_direction(COMMAND_STOP);
 	
-	g_motor_1.setpoint = 0;
-	g_motor_2.setpoint = 0;
-	g_motor_3.setpoint = 0;
+	set_motor_direction(COMMAND_STOP);
+	
+	cma_reset(&g_motor_1.hall_encoder.average_rps);
+	cma_reset(&g_motor_2.hall_encoder.average_rps);
+	cma_reset(&g_motor_3.hall_encoder.average_rps);
 	
 	// Clamp PWM to 0% duty cycle
 	OCR0B = 0xFF;
@@ -1099,6 +1161,16 @@ PRIVATE void do_parse_received_frame(void)
 	}
 }								  
 
+PRIVATE void setup_motors(void)
+{
+	g_motor_1.hall_encoder.current_rps = 0;
+	g_motor_2.hall_encoder.current_rps = 0;
+	g_motor_3.hall_encoder.current_rps = 0;
+	
+	cma_init(&g_motor_1.hall_encoder.average_rps);
+	cma_init(&g_motor_2.hall_encoder.average_rps);
+	cma_init(&g_motor_3.hall_encoder.average_rps);
+}
 
 int main(void)
 {
@@ -1116,15 +1188,12 @@ int main(void)
 	
 	enable_encoder_interrupt();
 	enable_pulse_tick_timer();
-
+	
+	setup_motors();
 	
 	sei();
 
 	enable_pid_timer();
-	
-	g_motor_1.hall_encoder.current_rps = 0;
-	g_motor_2.hall_encoder.current_rps = 0;
-	g_motor_3.hall_encoder.current_rps = 0;
 	
 	g_frame_receiver_state = CMD_RCV_IDLE;
 	
@@ -1184,11 +1253,16 @@ int main(void)
 			g_flag_command_in_queue = 0;
 		}
 		
-		if(g_flag_command_running && g_command_timer_pids >= command_duration_pids)
+		if(g_flag_command_running && g_pid_timer_trigger_count >= average_rps_broadcast_period_pids)
+		{
+			do_broadcast_average_rps();
+		}
+		
+		if(g_flag_command_running && g_pid_timer_trigger_count >= command_duration_pids)
 		{
 			do_on_command_complete();
 			g_flag_command_running = 0;
-			g_command_timer_pids = 0;
+			g_pid_timer_trigger_count = 0;
 		}
     }
 }
@@ -1226,7 +1300,7 @@ ISR(TIMER4_COMPA_vect)
 	// Increment command duration timer (which is measured in multiples of PID period)
 	if (g_flag_command_running)
 	{	
-		++g_command_timer_pids;
+		++g_pid_timer_trigger_count;
 	}
 	
 	// Signal the loop that PID is waiting for next calculation
