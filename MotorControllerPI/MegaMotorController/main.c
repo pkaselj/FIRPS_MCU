@@ -61,21 +61,15 @@
 
 // usart_send(...) sends data in little_endian byte order
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-
 	#define usart_send _usart_send_little_endian
-	
 	// Prevent compiler from warning us of unused function
-	PRIVATE void _usart_send_little_endian(unsigned char* pData, int length);
-	__attribute__((unused)) void _usart_send_big_endian(unsigned char* pData, int length);
-	
+	#define USE_IF_LITTLE_ENDIAN
+	#define USE_IF_BIG_ENDIAN		__attribute__((unused))
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-
 	#define usart_send _usart_send_big_endian
-	
 	// Prevent compiler from warning us of unused function
-	__attribute__((unused)) void _usart_send_little_endian(unsigned char* pData, int length);
-	PRIVATE void _usart_send_big_endian(unsigned char* pData, int length);
-	
+	#define USE_IF_LITTLE_ENDIAN	__attribute__((unused))
+	#define USE_IF_BIG_ENDIAN		
 #else
 	#error "Unknown byte order: " __BYTE_ORDER__
 #endif
@@ -264,10 +258,10 @@ PRIVATE volatile uint32_t g_command_duration_counter__50ms_ticks;
 PRIVATE volatile uint32_t g_odometry_time_since_last_broadcast__50ms_ticks;
 
 // Time between odometry broadcasts
-PRIVATE const uint32_t odometry_broadcast_period__50ms_ticks = 2;
+PRIVATE const uint32_t odometry_broadcast_period__50ms_ticks = 500/50;
 
 // Setpoint RPS (Revolutions Per Second) when motor is on
-PRIVATE const float motor_on_rps = 0.5f;
+// PRIVATE const float motor_on_rps = 0.5f;
 
 /*
  *	End Constants
@@ -350,27 +344,67 @@ PRIVATE volatile circular_buffer_t g_receive_buffer;
  *	End User Code Declaration
  */
 
+PRIVATE void debug_led_on(void);
+PRIVATE void debug_led_off(void);
+PRIVATE void debug_led_toggle(void);
+PRIVATE void do_blink_debug_led(void);
+PRIVATE void do_blink_debug_led_times(int times);
+PRIVATE void do_handle_fatal_error(void);
+PRIVATE void do_handle_fatal_error_with_error_code(uint8_t error_code);
+PRIVATE USE_IF_LITTLE_ENDIAN void _usart_send_little_endian(unsigned char* pData, int length);
+PRIVATE USE_IF_BIG_ENDIAN	 void _usart_send_big_endian(unsigned char* pData, int length);
+PRIVATE void usart_send_frame(stxetx_frame_t frame);
+PRIVATE inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder);
+PRIVATE void setup_gpio_pins(void);
+PRIVATE void configure_motors_for_action(float motor_1_rps, float motor_2_rps, float motor_3_rps);
+PRIVATE void configure_motor_pwm_timer(void);
+PRIVATE inline uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle);
+PRIVATE void enable_encoder_interrupt(void);
+PRIVATE void configure_pulse_tick_timer(void) ;
+PRIVATE void enable_pulse_tick_timer(void);
+PRIVATE void do_update_rps(hall_encoder_t* hEncoder);
+PRIVATE void setup_task_timer(void);
+PRIVATE void enable_task_timer(void);
+PRIVATE void setup_pid_timer(void);
+PRIVATE void enable_pid_timer(void);
+PRIVATE void pause_pid_timer(void);
+PRIVATE void resume_pid_timer(void);
+PRIVATE void setup_usart_receive(void);
+PRIVATE void setup_PID(void);
+PRIVATE void do_advance_pids(void);
+PRIVATE void on_received_msg_command(void);
+PRIVATE void on_received_msg_stop(void);
+PRIVATE void on_received_msg_unknown(void);
+PRIVATE void do_execute_command(void);
+PRIVATE void do_broadcast_average_rps(void);
+PRIVATE void do_on_command_complete(void);
+PRIVATE inline void command_buffer_write_byte(uint8_t data_byte);
+PRIVATE inline void clear_command_buffer();
+PRIVATE void do_on_command_byte_received(uint8_t byte_received);
+PRIVATE void do_parse_received_frame(void);
+PRIVATE void setup_motors(void);
+
 
 /*
  *	Start User Code Implementation
  */
 
-PRIVATE void debug_led_on(void)
+void debug_led_on(void)
 {
 	WRITE_PIN(ONBOARD_LED, 1);
 }
 
-PRIVATE void debug_led_off(void)
+void debug_led_off(void)
 {
 	WRITE_PIN(ONBOARD_LED, 0);
 }
 
-PRIVATE void debug_led_toggle(void)
+void debug_led_toggle(void)
 {
 	TOGGLE_PIN(ONBOARD_LED);
 }
 
-PRIVATE void do_blink_debug_led(void)
+void do_blink_debug_led(void)
 {
 	debug_led_on();
 	_delay_ms(500);
@@ -378,7 +412,7 @@ PRIVATE void do_blink_debug_led(void)
 	_delay_ms(500);
 }
 
-PRIVATE void do_blink_debug_led_times(int times)
+void do_blink_debug_led_times(int times)
 {
 	int i;
 	for (i = 0; i < times; ++i)
@@ -387,7 +421,7 @@ PRIVATE void do_blink_debug_led_times(int times)
 	}
 }
 
-PRIVATE void do_handle_fatal_error(void)
+void do_handle_fatal_error(void)
 {
 	// Signal fatal error with debug LED blinking
 	while(1)
@@ -397,7 +431,7 @@ PRIVATE void do_handle_fatal_error(void)
 	}
 }
 
-PRIVATE void do_handle_fatal_error_with_error_code(uint8_t error_code)
+void do_handle_fatal_error_with_error_code(uint8_t error_code)
 {
 	const int flutter_half_period_ms = 50;
 	const int flutter_duration_ms = 2000;
@@ -452,7 +486,7 @@ void _usart_send_big_endian(unsigned char* pData, int length)
 }
 
 
-PRIVATE void usart_send_frame(stxetx_frame_t frame)
+void usart_send_frame(stxetx_frame_t frame)
 {
 	memset(g_frame_encode_buffer, 0, FRAME_ENCODE_BUFFER_SIZE);
 
@@ -474,7 +508,7 @@ PRIVATE void usart_send_frame(stxetx_frame_t frame)
 	usart_send(g_frame_encode_buffer, g_frame_encode_buffer_length);
 }
 
-PRIVATE inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder)
+inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder)
 {
 	if (NULL == hEncoder)
 	{
@@ -494,7 +528,7 @@ PRIVATE inline void hall_encoder_do_save_timer_value(hall_encoder_t* hEncoder)
 }
 
 
-PRIVATE void setup_gpio_pins(void)
+void setup_gpio_pins(void)
 {
 	// DEBUG INBUILT-LED
 	PIN_MODE_OUTPUT(ONBOARD_LED);
@@ -524,81 +558,71 @@ PRIVATE void setup_gpio_pins(void)
 		//PIN_MODE_OUTPUT(DDRE, DDE1);
 }
 
-PRIVATE void set_motor_direction(command_e command)
+// `motor_X_rps` is positive for positive rotations
+// and negative for negative rotations. Zero stops motors.
+void configure_motors_for_action(float motor_1_rps, float motor_2_rps, float motor_3_rps)
 {
 	// Clockwise direction = INA & ~INB
 	
 	// --- MOTOR 1 : IN A (PA1), IN B (PC1)
 	// --- MOTOR 2 : IN A (PA2), IN B (PC2)
 	// --- MOTOR 3 : IN A (PA3), IN B (PC3)
-
-	switch(command)
+	
+	
+	/*============= MOTOR 1 =============*/
+	if (motor_1_rps < 0)
 	{
-		case COMMAND_FORWARD:
-		//do_blink_debug_led_times(1);
+		g_motor_1.setpoint = fabs(motor_1_rps);
+		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
+	}
+	else if(g_motor_1.setpoint > 0)
+	{
+		g_motor_1.setpoint = motor_1_rps;
+		SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
+	}
+	else
+	{
+		g_motor_1.setpoint = 0;
+		SET_MOTOR_DIRECTION_STOP(MOTOR_1_IN_A, MOTOR_1_IN_B);
+	}
+	
+	/*============= MOTOR 2 =============*/
+	if (g_motor_2.setpoint < 0)
+	{
+		g_motor_2.setpoint = fabs(motor_2_rps);
+		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
+	}
+	else if(g_motor_2.setpoint > 0)
+	{
+		g_motor_2.setpoint = motor_2_rps;
+		SET_MOTOR_DIRECTION_FORWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
+	}
+	else
+	{
+		g_motor_2.setpoint = 0;
+		SET_MOTOR_DIRECTION_STOP(MOTOR_2_IN_A, MOTOR_2_IN_B);
+	}
 		
-			SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
-			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
-			SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
-			
-			g_motor_1.setpoint = motor_on_rps;
-			g_motor_2.setpoint = motor_on_rps;
-			g_motor_3.setpoint = 0;
-		
-		break;
-		
-		case COMMAND_BACKWARD:
-		//do_blink_debug_led_times(2);
-			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
-			SET_MOTOR_DIRECTION_FORWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
-			SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
-			
-			g_motor_1.setpoint = motor_on_rps;
-			g_motor_2.setpoint = motor_on_rps;
-			g_motor_3.setpoint = 0;
-		break;
-		
-		case COMMAND_LEFT:
-		//do_blink_debug_led_times(3);
-			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
-			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
-			SET_MOTOR_DIRECTION_BACKWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
-			
-			g_motor_1.setpoint = motor_on_rps;
-			g_motor_2.setpoint = motor_on_rps;
-			g_motor_3.setpoint = motor_on_rps;
-		break;
-		
-		case COMMAND_RIGHT:
-		//do_blink_debug_led_times(4);
-			SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
-			SET_MOTOR_DIRECTION_FORWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
-			SET_MOTOR_DIRECTION_FORWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
-			
-			g_motor_1.setpoint = motor_on_rps;
-			g_motor_2.setpoint = motor_on_rps;
-			g_motor_3.setpoint = motor_on_rps;
-		break;
-		
-		case COMMAND_STOP:
-			SET_MOTOR_DIRECTION_STOP(MOTOR_1_IN_A, MOTOR_1_IN_B);
-			SET_MOTOR_DIRECTION_STOP(MOTOR_2_IN_A, MOTOR_2_IN_B);
-			SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
-			
-			g_motor_1.setpoint = 0;
-			g_motor_2.setpoint = 0;
-			g_motor_3.setpoint = 0;
-		break;
-		
-		default:
-		//do_blink_debug_led_times(5);
-		// Do nothing
-		break;
+	/*============= MOTOR 3 =============*/
+	if (g_motor_3.setpoint < 0)
+	{
+		g_motor_3.setpoint = fabs(motor_3_rps);
+		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
+	}
+	else if(g_motor_3.setpoint > 0)
+	{
+		g_motor_3.setpoint = motor_3_rps;
+		SET_MOTOR_DIRECTION_FORWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
+	}
+	else
+	{
+		g_motor_3.setpoint = 0;
+		SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
 	}
 
 }
 
-PRIVATE void configure_motor_pwm_timer(void)
+void configure_motor_pwm_timer(void)
 {
 	//////////////////////////////////////////////////////////////////////////
 	// Three motors need three PWM channels (Output Compare Registers):
@@ -673,7 +697,7 @@ PRIVATE void configure_motor_pwm_timer(void)
 //		* 8 bit timer
 //		* Phase corrected PWM mode
 //		* Set on upcount, clear on downcount
-PRIVATE inline uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle)
+inline uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle)
 {
 	// Set phase corrected PWM value from defined duty cycle
 	// NOTE: Formula used is modified for integer division
@@ -684,7 +708,7 @@ PRIVATE inline uint8_t calculate_oc_value_from_dc(uint32_t duty_cycle)
 }
 
 
-PRIVATE void enable_encoder_interrupt(void)
+void enable_encoder_interrupt(void)
 {
 	// Enable Pullups (Disable pullup blockade)
 	CLR_BIT(MCUCR, PUD);
@@ -736,7 +760,7 @@ PRIVATE void enable_encoder_interrupt(void)
 
 }
  
-PRIVATE void configure_pulse_tick_timer(void) 
+void configure_pulse_tick_timer(void) 
 {
 	// Set normal mode of operation
 	CLR_BIT(TCCR1A, COM1A0);
@@ -751,7 +775,7 @@ PRIVATE void configure_pulse_tick_timer(void)
 	TCNT1 = 0;
 }
 
-PRIVATE void enable_pulse_tick_timer(void)
+void enable_pulse_tick_timer(void)
 {
 	// Enable overflow interrupt	
 	SET_BIT(TIMSK1, TOIE1);
@@ -764,7 +788,7 @@ PRIVATE void enable_pulse_tick_timer(void)
 
 // Calculated new RPS value for 'hEncoder' Hall Encoder
 // From saved timer values (which are saved in INT0/1 ISRs)
-PRIVATE void do_update_rps(hall_encoder_t* hEncoder)
+void do_update_rps(hall_encoder_t* hEncoder)
 {	
 	if (NULL == hEncoder)
 	{
@@ -804,7 +828,7 @@ PRIVATE void do_update_rps(hall_encoder_t* hEncoder)
 	
 }
 
-PRIVATE void setup_task_timer(void)
+void setup_task_timer(void)
 {
 	// 16-bit TIMER3 is used to time tasks like:
 	// Execution of commands, periodic sending of data, etc.
@@ -829,7 +853,7 @@ PRIVATE void setup_task_timer(void)
 	WRITE_BIT(TCCR3B, WGM33, 0);
 }
 
-PRIVATE void enable_task_timer(void)
+void enable_task_timer(void)
 {
 	// Enable interrupt
 	SET_BIT(TIMSK3, OCIE3A);
@@ -840,7 +864,7 @@ PRIVATE void enable_task_timer(void)
 	WRITE_BIT(TCCR3B, CS32, 1);
 }
 
-PRIVATE void setup_pid_timer(void)
+void setup_pid_timer(void)
 {
 	// Time for timer to tick once T1 = 1024/F_CPU (prescaler = 1024).
 	// If we want timer to interrupt every T seconds, we must set compare register
@@ -864,7 +888,7 @@ PRIVATE void setup_pid_timer(void)
 	WRITE_BIT(TCCR4B, WGM43, 0);
 }
 
-PRIVATE void enable_pid_timer(void)
+void enable_pid_timer(void)
 {
 	// Enable interrupt
 	SET_BIT(TIMSK4, OCIE4A);
@@ -875,13 +899,13 @@ PRIVATE void enable_pid_timer(void)
 	WRITE_BIT(TCCR4B, CS42, 1);
 }
 
-PRIVATE void pause_pid_timer(void)
+void pause_pid_timer(void)
 {
 	// Disable interrupt
 	CLR_BIT(TIMSK4, OCIE4A);
 }
 
-PRIVATE void resume_pid_timer(void)
+void resume_pid_timer(void)
 {
 	// Reset timer value
 	TCNT4 = 0;
@@ -890,7 +914,7 @@ PRIVATE void resume_pid_timer(void)
 	SET_BIT(TIMSK4, OCIE4A);
 }
 
-PRIVATE void setup_usart_receive(void)
+void setup_usart_receive(void)
 {
 	// --- USART0
 	
@@ -920,7 +944,7 @@ PRIVATE void setup_usart_receive(void)
 	}
 }
 
-PRIVATE void setup_PID(void)
+void setup_PID(void)
 {
 	// PID Controller for Motor 1
 	PID_Init(
@@ -953,7 +977,7 @@ PRIVATE void setup_PID(void)
 	);
 }
 
-PRIVATE void do_advance_pids(void)
+void do_advance_pids(void)
 {
 	float error_1 = 0;
 	float input_1 = 0;
@@ -1008,7 +1032,69 @@ PRIVATE void do_advance_pids(void)
 	
 }
 
-PRIVATE void do_execute_command(void)
+void on_received_msg_command(void)
+{		
+	uint32_t command_duration_ms = 0;
+	
+	if (g_received_frame.len_bytes < 3 * sizeof(float) + sizeof(uint32_t))
+	{
+		// TODO: Add general errors
+		// TODO: Add info messages
+		do_handle_fatal_error();
+	}
+	
+	float motor_1_rps_setpoint = 0;
+	float motor_2_rps_setpoint = 0;
+	float motor_3_rps_setpoint = 0;
+	
+	memcpy((void*)&motor_1_rps_setpoint,  (const void*)(g_received_frame.p_payload +  0), sizeof(float));
+	memcpy((void*)&motor_2_rps_setpoint,  (const void*)(g_received_frame.p_payload +  4), sizeof(float));
+	memcpy((void*)&motor_3_rps_setpoint,  (const void*)(g_received_frame.p_payload +  8), sizeof(float));
+	memcpy((void*)&command_duration_ms,   (const void*)(g_received_frame.p_payload + 12), sizeof(uint32_t));
+	
+	// UINT32_MAX will be used in place of `float`'s INFINITY
+	// i.e. it will denote command that never stops, in this case
+	// a command that runs for UINT32_MAX * 50ms = 214748364750 ms (approx. 2485 days)
+	if (command_duration_ms == UINT32_MAX)
+	{
+		g_target_command_duration__50ms_ticks = UINT32_MAX;
+	}
+	else
+	{
+		// Round command duration to nearest multiple of 50ms
+		g_target_command_duration__50ms_ticks = command_duration_ms / 50;
+		if((command_duration_ms % 50) > (50/2))
+		{
+			g_target_command_duration__50ms_ticks += 1;
+		}	
+	}
+
+	cma_reset(&g_motor_1.hall_encoder.average_rps);
+	cma_reset(&g_motor_2.hall_encoder.average_rps);
+	cma_reset(&g_motor_3.hall_encoder.average_rps);
+	
+	configure_motors_for_action(motor_1_rps_setpoint, motor_2_rps_setpoint, motor_3_rps_setpoint);
+	
+	g_command_duration_counter__50ms_ticks = 0;
+	g_odometry_time_since_last_broadcast__50ms_ticks = 0;
+	
+	g_flag_command_running = 1;
+	resume_pid_timer();
+}
+
+void on_received_msg_stop(void)
+{
+	g_flag_command_running = 0;
+	do_on_command_complete();
+}
+
+void on_received_msg_unknown(void)
+{
+	do_handle_fatal_error();
+}
+
+
+void do_execute_command(void)
 {		
 	//// Ignore new command while current is being executed
 	//if(g_flag_command_running)
@@ -1016,51 +1102,23 @@ PRIVATE void do_execute_command(void)
 		//return;
 	//}	
 	
-	command_e command = COMMAND_UNKNOWN;
-	
 	switch(g_received_frame.msg_type)
 	{
-		case MSG_TYPE_GO_FORWARD:
-		command = COMMAND_FORWARD;
-		//do_blink_debug_led_times(1);
+		case MSG_TYPE_COMMAND:
+			on_received_msg_command();
 		break;
-		case MSG_TYPE_GO_BACKWARD:
-		command = COMMAND_BACKWARD;
-		//do_blink_debug_led_times(2);
-		break;
-		case MSG_TYPE_ROTATE_LEFT:
-		command = COMMAND_LEFT;
-		//do_blink_debug_led_times(3);
-		break;
-		case MSG_TYPE_ROTATE_RIGHT:
-		command = COMMAND_RIGHT;
-		//do_blink_debug_led_times(4);
-		break;
+		
 		case MSG_TYPE_STOP:
-		command = COMMAND_STOP;
-		//do_blink_debug_led_times(5);
+			on_received_msg_stop();
 		break;
+		
 		default:
-		command = COMMAND_UNKNOWN;
-		//do_blink_debug_led_times(6);
+			on_received_msg_unknown();
 		break;
 	}
-	
-	set_motor_direction(command);
-	
-	g_target_command_duration__50ms_ticks = 3000/50;
-	if (g_target_command_duration__50ms_ticks == INFINITY)
-	{
-		g_target_command_duration__50ms_ticks = UINT32_MAX;
-	}
-	
-	resume_pid_timer();
-	
-	g_command_duration_counter__50ms_ticks = 0;
-	g_flag_command_running = 1;
 }
 
-PRIVATE void do_broadcast_average_rps(void)
+void do_broadcast_average_rps(void)
 {
 	// TODO: timestamp?
 	
@@ -1071,6 +1129,8 @@ PRIVATE void do_broadcast_average_rps(void)
 	stxetx_frame_t frame;
 	
 	stxetx_init_empty_frame(&frame);
+	
+	frame.msg_type = MSG_TYPE_ODOMETRY;
 	
 	// const uint8_t payload_size = 3 * sizeof(float);
 	
@@ -1092,13 +1152,13 @@ PRIVATE void do_broadcast_average_rps(void)
 	usart_send_frame(frame);
 }
 
-PRIVATE void do_on_command_complete(void)
+
+void do_on_command_complete(void)
 {
-	//set_motor_direction(COMMAND_STOP);
-	
 	pause_pid_timer();
 	
-	set_motor_direction(COMMAND_STOP);
+	// Stop motors by setting their speed to 0.
+	configure_motors_for_action(0, 0, 0);
 	
 	cma_reset(&g_motor_1.hall_encoder.average_rps);
 	cma_reset(&g_motor_2.hall_encoder.average_rps);
@@ -1113,14 +1173,21 @@ PRIVATE void do_on_command_complete(void)
 	PID_ClearAccumulatedValues(&g_motor_2.pid);
 	PID_ClearAccumulatedValues(&g_motor_3.pid);
 	//debug_led_off();
+	
+	// Send `FINISHED` message
+	stxetx_frame_t frame;
+	stxetx_init_empty_frame(&frame);
+	frame.msg_type = MSG_TYPE_FINISHED;
+	usart_send_frame(frame);
 }
 
-PRIVATE inline void command_buffer_write_byte(uint8_t data_byte)
+
+inline void command_buffer_write_byte(uint8_t data_byte)
 {
 	g_frame_decode_buffer[g_frame_decode_buffer_length++] = data_byte;
 }
 
-PRIVATE inline void clear_command_buffer()
+inline void clear_command_buffer()
 {
 	g_frame_decode_buffer_length = 0;
 	memset(g_frame_decode_buffer, 0, FRAME_DECODE_BUFFER_SIZE);
@@ -1206,7 +1273,7 @@ error:
 	return;
 }
 
-PRIVATE void do_parse_received_frame(void)
+void do_parse_received_frame(void)
 {
 	uint8_t payload_buffer[PAYLOAD_BUFFER_SIZE] = {0};
 	stxetx_init_empty_frame(&g_received_frame);
@@ -1228,7 +1295,7 @@ PRIVATE void do_parse_received_frame(void)
 	}
 }								  
 
-PRIVATE void setup_motors(void)
+void setup_motors(void)
 {
 	g_motor_1.hall_encoder.current_rps = 0;
 	g_motor_2.hall_encoder.current_rps = 0;
@@ -1307,9 +1374,7 @@ int main(void)
 		}
 
 		if(g_flag_frame_awaits_decoding && !g_flag_command_in_queue)
-		{
-			// TODO: do not set command running flag on unknown command
-			
+		{	
 			do_parse_received_frame();
 			g_flag_frame_awaits_decoding = 0;
 			g_flag_command_in_queue = 1;
@@ -1395,10 +1460,12 @@ ISR(TIMER3_COMPA_vect)
 
 ISR(USART0_RX_vect)
 {
-	if (IS_BIT_SET(UCSR0A, RXC0) && !g_flag_command_running)
+	if (
+		IS_BIT_SET(UCSR0A, RXC0)
+		&& CBuf_AvailableForWrite(g_receive_buffer)
+		/* && !g_flag_command_running */
+		)
 	{
-		//g_frame_decode_buffer = UDR0;
-		//g_flag_frame_awaits_decoding = 1;
 		uint8_t byte_received = UDR0;
 		
 		// For some reason, MSB is always 1
