@@ -21,6 +21,7 @@
 #include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <string.h> // memset
+#include <limits.h> // UINT32_MAX
 #include "pid.h"
 #include "utils_bitops.h"
 #include "util_pindefs.h"
@@ -60,9 +61,21 @@
 
 // usart_send(...) sends data in little_endian byte order
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+
 	#define usart_send _usart_send_little_endian
+	
+	// Prevent compiler from warning us of unused function
+	PRIVATE void _usart_send_little_endian(unsigned char* pData, int length);
+	__attribute__((unused)) void _usart_send_big_endian(unsigned char* pData, int length);
+	
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+
 	#define usart_send _usart_send_big_endian
+	
+	// Prevent compiler from warning us of unused function
+	__attribute__((unused)) void _usart_send_little_endian(unsigned char* pData, int length);
+	PRIVATE void _usart_send_big_endian(unsigned char* pData, int length);
+	
 #else
 	#error "Unknown byte order: " __BYTE_ORDER__
 #endif
@@ -240,9 +253,18 @@ typedef enum {
 
 // Commands last for 3.008 seconds (T_PID = 1/62.5 s)
 //const uint32_t command_duration_pids = 188;
-PRIVATE const uint32_t command_duration_pids = 2*188;
+PRIVATE volatile uint32_t g_target_command_duration__50ms_ticks = 3000/50;
 
-PRIVATE const uint32_t average_rps_broadcast_period_pids = 188;
+// Incremented in task timer ISR. Represents duration of command
+// in units of 50ms ticks.
+PRIVATE volatile uint32_t g_command_duration_counter__50ms_ticks;
+
+// Incremented in task timer ISR. Represents time since last
+// odometry broadcast in units of 50ms ticks.
+PRIVATE volatile uint32_t g_odometry_time_since_last_broadcast__50ms_ticks;
+
+// Time between odometry broadcasts
+PRIVATE const uint32_t odometry_broadcast_period__50ms_ticks = 2;
 
 // Setpoint RPS (Revolutions Per Second) when motor is on
 PRIVATE const float motor_on_rps = 0.5f;
@@ -269,11 +291,6 @@ PRIVATE motor_t g_motor_3;
 // Signal to main loop that PID algorithm is
 // ready to be executed.
 PRIVATE volatile uint8_t g_flag_pid = 0;
-
-// Incremented on each PID execution (when PID timer triggers)
-// Used to keep track of duration of current command (measured in
-// multiples of PID intervals, see 'command_duration_pids')
-PRIVATE volatile uint32_t g_pid_timer_trigger_count;
 
 // Flag that indicates that there is a command in command buffer,
 // and that main loop should parse it.
@@ -400,9 +417,10 @@ PRIVATE void do_handle_fatal_error_with_error_code(uint8_t error_code)
 		do_blink_debug_led_times(error_code);
 		_delay_ms(error_code_flutter_delay_ms);
 	}
-}																  
+}
+										  
 // Assumes little-endianness
-PRIVATE void _usart_send_little_endian(unsigned char* pData, int length)
+void _usart_send_little_endian(unsigned char* pData, int length)
 {
 	
 	// Send Data
@@ -418,7 +436,7 @@ PRIVATE void _usart_send_little_endian(unsigned char* pData, int length)
 }
 
 // Assumes big-endianness
-PRIVATE void _usart_send_big_endian(unsigned char* pData, int length)
+void _usart_send_big_endian(unsigned char* pData, int length)
 {
 	
 	// Send Data
@@ -432,6 +450,8 @@ PRIVATE void _usart_send_big_endian(unsigned char* pData, int length)
 		UDR0 = pData[i];
 	}
 }
+
+
 PRIVATE void usart_send_frame(stxetx_frame_t frame)
 {
 	memset(g_frame_encode_buffer, 0, FRAME_ENCODE_BUFFER_SIZE);
@@ -784,6 +804,42 @@ PRIVATE void do_update_rps(hall_encoder_t* hEncoder)
 	
 }
 
+PRIVATE void setup_task_timer(void)
+{
+	// 16-bit TIMER3 is used to time tasks like:
+	// Execution of commands, periodic sending of data, etc.
+	
+	// For this task, one tick of timer is set to 50ms and
+	// each task should sample timer at the beginning and
+	// measure duration in main loop.
+	
+	// Prescaler = 256, Compare Value = 3125 gives one tick period of 50ms
+	const uint16_t timer_compare_value = 3125;
+	
+	// Set output compare register A value
+	OCR3A = timer_compare_value;
+	
+	// Initialize timer value
+	TCNT3 = 0;
+	
+	// Set OC CTC (TOP = OCR3A) mode of operation
+	WRITE_BIT(TCCR3A, WGM30, 0);
+	WRITE_BIT(TCCR3A, WGM31, 0);
+	WRITE_BIT(TCCR3B, WGM32, 1);
+	WRITE_BIT(TCCR3B, WGM33, 0);
+}
+
+PRIVATE void enable_task_timer(void)
+{
+	// Enable interrupt
+	SET_BIT(TIMSK3, OCIE3A);
+	
+	// Enable clock (prescaler = 256)
+	WRITE_BIT(TCCR3B, CS30, 0);
+	WRITE_BIT(TCCR3B, CS31, 0);
+	WRITE_BIT(TCCR3B, CS32, 1);
+}
+
 PRIVATE void setup_pid_timer(void)
 {
 	// Time for timer to tick once T1 = 1024/F_CPU (prescaler = 1024).
@@ -817,6 +873,21 @@ PRIVATE void enable_pid_timer(void)
 	WRITE_BIT(TCCR4B, CS40, 1);
 	WRITE_BIT(TCCR4B, CS41, 0);
 	WRITE_BIT(TCCR4B, CS42, 1);
+}
+
+PRIVATE void pause_pid_timer(void)
+{
+	// Disable interrupt
+	CLR_BIT(TIMSK4, OCIE4A);
+}
+
+PRIVATE void resume_pid_timer(void)
+{
+	// Reset timer value
+	TCNT4 = 0;
+	
+	// Enable interrupt
+	SET_BIT(TIMSK4, OCIE4A);
 }
 
 PRIVATE void setup_usart_receive(void)
@@ -947,21 +1018,6 @@ PRIVATE void do_execute_command(void)
 	
 	command_e command = COMMAND_UNKNOWN;
 	
-	//do_blink_debug_led_times(g_received_frame.msg_type);
-	
-	//stxetx_frame_t frame;
-	//stxetx_init_empty_frame(&frame);
-	//
-	//frame.msg_type = 15;
-	//frame.flags |= FLAG_SHOULD_ACK;
-	//frame.checksum = 0;
-	//
-	//const char* p_msg_format = "Received MSG_TYPE = %d";
-	//char p_message_data[64] = {0};
-	//snprintf(p_message_data, 64, p_msg_format, g_received_frame.msg_type);
-	//stxetx_add_payload(&frame, p_message_data, strlen(p_message_data));
-	//usart_send_frame(frame);
-	
 	switch(g_received_frame.msg_type)
 	{
 		case MSG_TYPE_GO_FORWARD:
@@ -992,6 +1048,15 @@ PRIVATE void do_execute_command(void)
 	
 	set_motor_direction(command);
 	
+	g_target_command_duration__50ms_ticks = 3000/50;
+	if (g_target_command_duration__50ms_ticks == INFINITY)
+	{
+		g_target_command_duration__50ms_ticks = UINT32_MAX;
+	}
+	
+	resume_pid_timer();
+	
+	g_command_duration_counter__50ms_ticks = 0;
 	g_flag_command_running = 1;
 }
 
@@ -1009,12 +1074,12 @@ PRIVATE void do_broadcast_average_rps(void)
 	
 	// const uint8_t payload_size = 3 * sizeof(float);
 	
-	//const uint8_t p_payload[payload_size] = {
-	const uint8_t p_payload[12] = {0};
+	//uint8_t p_payload[payload_size] = {
+	uint8_t p_payload[12] = {0};
 		
-	memcpy(p_payload + 0, (void*)&motor_1_rps, sizeof(float));
-	memcpy(p_payload + 4, (void*)&motor_2_rps, sizeof(float));
-	memcpy(p_payload + 8, (void*)&motor_3_rps, sizeof(float));
+	memcpy(p_payload + 0, (const void*)&motor_1_rps, sizeof(float));
+	memcpy(p_payload + 4, (const void*)&motor_2_rps, sizeof(float));
+	memcpy(p_payload + 8, (const void*)&motor_3_rps, sizeof(float));
 	
 	//uint8_t ec = stxetx_add_payload(&frame, p_payload, payload_size);
 	uint8_t ec = stxetx_add_payload(&frame, p_payload, 12);
@@ -1030,6 +1095,8 @@ PRIVATE void do_broadcast_average_rps(void)
 PRIVATE void do_on_command_complete(void)
 {
 	//set_motor_direction(COMMAND_STOP);
+	
+	pause_pid_timer();
 	
 	set_motor_direction(COMMAND_STOP);
 	
@@ -1180,6 +1247,7 @@ int main(void)
 	
 	configure_motor_pwm_timer();
 	setup_pid_timer();
+	setup_task_timer();
 	configure_pulse_tick_timer();
 	
 	setup_usart_receive();
@@ -1194,6 +1262,7 @@ int main(void)
 	sei();
 
 	enable_pid_timer();
+	enable_task_timer();
 	
 	g_frame_receiver_state = CMD_RCV_IDLE;
 	
@@ -1253,16 +1322,19 @@ int main(void)
 			g_flag_command_in_queue = 0;
 		}
 		
-		if(g_flag_command_running && g_pid_timer_trigger_count >= average_rps_broadcast_period_pids)
+		if(g_flag_command_running
+			&& g_odometry_time_since_last_broadcast__50ms_ticks >= odometry_broadcast_period__50ms_ticks)
 		{
 			do_broadcast_average_rps();
+			g_odometry_time_since_last_broadcast__50ms_ticks = 0;
 		}
 		
-		if(g_flag_command_running && g_pid_timer_trigger_count >= command_duration_pids)
+		if(g_flag_command_running
+			&& g_command_duration_counter__50ms_ticks >= g_target_command_duration__50ms_ticks)
 		{
 			do_on_command_complete();
 			g_flag_command_running = 0;
-			g_pid_timer_trigger_count = 0;
+			g_command_duration_counter__50ms_ticks = 0;
 		}
     }
 }
@@ -1297,14 +1369,28 @@ ISR(TIMER1_OVF_vect)
 
 ISR(TIMER4_COMPA_vect)
 {	
-	// Increment command duration timer (which is measured in multiples of PID period)
+	// Signal the loop that PID is waiting for next calculation
 	if (g_flag_command_running)
-	{	
-		++g_pid_timer_trigger_count;
+	{
+		g_flag_pid = 1;
+	}
+}
+
+ISR(TIMER3_COMPA_vect)
+{
+	// Increment task timers
+	
+	// ONLY If command is being executed:
+	if (g_flag_command_running)
+	{
+		// Increment command duration counter
+		++g_command_duration_counter__50ms_ticks;
+		
+		// Increment odometry counter
+		++g_odometry_time_since_last_broadcast__50ms_ticks;
 	}
 	
-	// Signal the loop that PID is waiting for next calculation
-	g_flag_pid = 1;
+
 }
 
 ISR(USART0_RX_vect)

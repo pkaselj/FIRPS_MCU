@@ -24,7 +24,8 @@ typedef enum {
 	MSG_TYPE_GO_BACKWARD = 3,
 	MSG_TYPE_ROTATE_LEFT = 4,
 	MSG_TYPE_ROTATE_RIGHT = 5,
-	MSG_TYPE_STOP = 6
+	MSG_TYPE_STOP = 6,
+	MSG_TYPE_ODOMETRY = 7,
 } msg_type_e;
 
 typedef enum {

@@ -34,7 +34,7 @@ uint8_t CBuf_Init(circular_buffer_t* h_circ_buffer, uint8_t* p_buffer, size_t bu
 	return CBUF_ERROR_NO_ERROR;
 }
 
-inline uint8_t CBuf_HasAnyIterOverflown_(circular_buffer_t circ_buffer)
+uint8_t CBuf_HasAnyIterOverflown_(circular_buffer_t circ_buffer)
 {
 	const uint8_t* it_buffer_end = &circ_buffer.p_buffer[circ_buffer.buffer_size];
 	return (circ_buffer.it_begin >= it_buffer_end) || (circ_buffer.it_end >= it_buffer_end);

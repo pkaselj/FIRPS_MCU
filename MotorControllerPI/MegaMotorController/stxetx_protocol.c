@@ -70,6 +70,9 @@ static inline uint8_t* read_byte_from_buffer_(uint8_t* p_buffer, uint8_t* p_dest
 
 uint8_t stxetx_encode_n(uint8_t* p_dest_buffer, stxetx_frame_t source, uint32_t n, uint8_t* p_bytes_written)
 {
+	// Unused
+	(void) n;
+	
 	if (NULL == p_dest_buffer)
 	{
 		return STXETX_ERROR_INVALID_HANDLE;
@@ -154,6 +157,10 @@ uint8_t* p_payload_buffer,
 uint8_t n_payload
 )
 {
+	// Unused
+	(void) n_src;
+	(void) n_payload;
+	
 	if (NULL == p_src_buffer || NULL == p_dest_obj)
 	{
 		return STXETX_ERROR_INVALID_HANDLE;
