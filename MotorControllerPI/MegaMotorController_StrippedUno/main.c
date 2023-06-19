@@ -19,7 +19,6 @@
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <string.h> // memset
 #include <limits.h> // UINT32_MAX
@@ -247,10 +246,10 @@ PRIVATE volatile uint32_t g_command_duration_counter__50ms_ticks;
 PRIVATE volatile uint32_t g_odometry_time_since_last_broadcast__50ms_ticks;
 
 // Time between odometry broadcasts
-PRIVATE const uint32_t odometry_broadcast_period__50ms_ticks = 2;
+PRIVATE const uint32_t odometry_broadcast_period__50ms_ticks = 500/50;
 
 // Setpoint RPS (Revolutions Per Second) when motor is on
-PRIVATE const float motor_on_rps = 0.5f;
+// PRIVATE const float motor_on_rps = 0.5f;
 
 /*
  *	End Constants
@@ -525,6 +524,75 @@ PRIVATE void setup_usart_receive(void)
 	}
 }
 
+PRIVATE void on_received_msg_command(void)
+{		
+	uint32_t command_duration_ms = 0;
+	
+	if (g_received_frame.len_bytes < 3 * sizeof(float) + sizeof(uint32_t))
+	{
+		// TODO: Add general errors
+		// TODO: Add info messages
+		do_handle_fatal_error();
+	}
+	
+	memcpy((void*)&g_motor_1.setpoint,  (const void*)(g_received_frame.p_payload +  0), sizeof(float));
+	memcpy((void*)&g_motor_2.setpoint,  (const void*)(g_received_frame.p_payload +  4), sizeof(float));
+	memcpy((void*)&g_motor_3.setpoint,  (const void*)(g_received_frame.p_payload +  8), sizeof(float));
+	memcpy((void*)&command_duration_ms, (const void*)(g_received_frame.p_payload + 12), sizeof(uint32_t));
+	
+	// UINT32_MAX will be used in place of `float`'s INFINITY
+	// i.e. it will denote command that never stops, in this case
+	// a command that runs for UINT32_MAX * 50ms = 214748364750 ms (approx. 2485 days)
+	if (command_duration_ms == UINT32_MAX)
+	{
+		g_target_command_duration__50ms_ticks = UINT32_MAX;
+	}
+	else
+	{
+		// Round command duration to nearest multiple of 50ms
+		g_target_command_duration__50ms_ticks = command_duration_ms / 50;
+		if((command_duration_ms % 50) > (50/2))
+		{
+			g_target_command_duration__50ms_ticks += 1;
+		}	
+	}
+
+	// TODO:
+	// Set motor directions, fabs(setpoint)
+	// Resume PID timer
+	// Reset CMA
+	
+	// DEBUG
+	cma_reset(&g_motor_1.hall_encoder.average_rps);
+	cma_reset(&g_motor_2.hall_encoder.average_rps);
+	cma_reset(&g_motor_3.hall_encoder.average_rps);
+	
+	g_motor_1.hall_encoder.current_rps = g_motor_1.setpoint;
+	g_motor_2.hall_encoder.current_rps = g_motor_2.setpoint;
+	g_motor_3.hall_encoder.current_rps = g_motor_3.setpoint;
+
+	
+	g_command_duration_counter__50ms_ticks = 0;
+	g_odometry_time_since_last_broadcast__50ms_ticks = 0;
+	
+	g_flag_command_running = 1;
+}
+
+PRIVATE void on_received_msg_stop(void)
+{
+	
+	g_flag_command_running = 0;
+	
+	usart_send_frame(g_received_frame);
+	
+	// TODO: Stop motors
+}
+
+PRIVATE void on_received_msg_unknown(void)
+{
+	do_handle_fatal_error();
+}
+
 
 PRIVATE void do_execute_command(void)
 {		
@@ -534,67 +602,50 @@ PRIVATE void do_execute_command(void)
 		//return;
 	//}	
 	
-	command_e command = COMMAND_UNKNOWN;
-	
 	switch(g_received_frame.msg_type)
 	{
-		case MSG_TYPE_GO_FORWARD:
-		command = COMMAND_FORWARD;
-		//do_blink_debug_led_times(1);
+		case MSG_TYPE_COMMAND:
+			on_received_msg_command();
 		break;
-		case MSG_TYPE_GO_BACKWARD:
-		command = COMMAND_BACKWARD;
-		//do_blink_debug_led_times(2);
-		break;
-		case MSG_TYPE_ROTATE_LEFT:
-		command = COMMAND_LEFT;
-		//do_blink_debug_led_times(3);
-		break;
-		case MSG_TYPE_ROTATE_RIGHT:
-		command = COMMAND_RIGHT;
-		//do_blink_debug_led_times(4);
-		break;
+		
 		case MSG_TYPE_STOP:
-		command = COMMAND_STOP;
-		//do_blink_debug_led_times(5);
+			on_received_msg_stop();
 		break;
+		
 		default:
-		command = COMMAND_UNKNOWN;
-		//do_blink_debug_led_times(6);
+			on_received_msg_unknown();
 		break;
 	}
-	
-	g_target_command_duration__50ms_ticks = 3000/50;
-	if (g_target_command_duration__50ms_ticks == INFINITY)
-	{
-		g_target_command_duration__50ms_ticks = UINT32_MAX;
-	}
-	
-	
-	g_command_duration_counter__50ms_ticks = 0;
-	g_flag_command_running = 1;
 }
 
 PRIVATE void do_broadcast_average_rps(void)
 {
-	// TODO: timestamp?
+	// DEBUG
 	
-	const float motor_1_rps = 10;
-	const float motor_2_rps = -10;
-	const float motor_3_rps = 15;
+	g_motor_1.hall_encoder.current_rps += 1;
+	g_motor_2.hall_encoder.current_rps += 1;
+	g_motor_3.hall_encoder.current_rps += 1;
+	
+	cma_feed_sample(&g_motor_1.hall_encoder.average_rps, g_motor_1.hall_encoder.current_rps);
+	cma_feed_sample(&g_motor_2.hall_encoder.average_rps, g_motor_2.hall_encoder.current_rps);
+	cma_feed_sample(&g_motor_3.hall_encoder.average_rps, g_motor_3.hall_encoder.current_rps);
+	
+	// TODO: timestamp?
 	
 	stxetx_frame_t frame;
 	
 	stxetx_init_empty_frame(&frame);
+	
+	frame.msg_type = MSG_TYPE_ODOMETRY;
 	
 	// const uint8_t payload_size = 3 * sizeof(float);
 	
 	//uint8_t p_payload[payload_size] = {
 	uint8_t p_payload[12] = {0};
 		
-	memcpy(p_payload + 0, (const void*)&motor_1_rps, sizeof(float));
-	memcpy(p_payload + 4, (const void*)&motor_2_rps, sizeof(float));
-	memcpy(p_payload + 8, (const void*)&motor_3_rps, sizeof(float));
+	memcpy(p_payload + 0, (const void*)&g_motor_1.hall_encoder.average_rps.cma_value , sizeof(float));
+	memcpy(p_payload + 4, (const void*)&g_motor_2.hall_encoder.average_rps.cma_value , sizeof(float));
+	memcpy(p_payload + 8, (const void*)&g_motor_3.hall_encoder.average_rps.cma_value , sizeof(float));
 	
 	////uint8_t ec = stxetx_add_payload(&frame, p_payload, payload_size);
 	uint8_t ec = stxetx_add_payload(&frame, p_payload, 12);
@@ -613,8 +664,9 @@ PRIVATE void do_on_command_complete(void)
 
 	stxetx_frame_t frame;
 	stxetx_init_empty_frame(&frame);
-	frame.msg_type = MSG_TYPE_STOP;
+	frame.msg_type = MSG_TYPE_FINISHED;
 	usart_send_frame(frame);
+
 	
 	//debug_led_off();
 }
@@ -737,6 +789,8 @@ int main(void)
 	
 	// Setup
 	
+	PIN_MODE_OUTPUT(PIN_B5);
+	
 	setup_task_timer();
 	
 	setup_usart_receive();
@@ -749,7 +803,7 @@ int main(void)
 	
     while (1) 
     {
-		
+	
 		if(CBuf_AvailableForRead(g_receive_buffer) && g_frame_receiver_state != CMD_RCV_FULL_FRAME_READ)
 		{
 			uint8_t value;
@@ -764,10 +818,9 @@ int main(void)
 			}
 		}
 
+
 		if(g_flag_frame_awaits_decoding && !g_flag_command_in_queue)
-		{
-			// TODO: do not set command running flag on unknown command
-			
+		{	
 			do_parse_received_frame();
 			g_flag_frame_awaits_decoding = 0;
 			g_flag_command_in_queue = 1;
@@ -825,7 +878,11 @@ ISR(TIMER1_COMPA_vect)
 
 ISR(USART_RX_vect)
 {
-	if (IS_BIT_SET(UCSR0A, RXC0) && !g_flag_command_running)
+	if (
+		IS_BIT_SET(UCSR0A, RXC0)
+		&& CBuf_AvailableForWrite(g_receive_buffer)
+		/* && !g_flag_command_running */
+		)
 	{
 		//g_frame_decode_buffer = UDR0;
 		//g_flag_frame_awaits_decoding = 1;
