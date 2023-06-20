@@ -22,6 +22,7 @@
 #include <util/delay.h>
 #include <string.h> // memset
 #include <limits.h> // UINT32_MAX
+#include <math.h> // signbit
 #include "pid.h"
 #include "utils_bitops.h"
 #include "util_pindefs.h"
@@ -568,56 +569,55 @@ void configure_motors_for_action(float motor_1_rps, float motor_2_rps, float mot
 	// --- MOTOR 2 : IN A (PA2), IN B (PC2)
 	// --- MOTOR 3 : IN A (PA3), IN B (PC3)
 	
-	
 	/*============= MOTOR 1 =============*/
-	if (motor_1_rps < 0)
-	{
-		g_motor_1.setpoint = fabs(motor_1_rps);
-		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
-	}
-	else if(g_motor_1.setpoint > 0)
-	{
-		g_motor_1.setpoint = motor_1_rps;
-		SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
-	}
-	else
+	if (motor_1_rps == 0)
 	{
 		g_motor_1.setpoint = 0;
 		SET_MOTOR_DIRECTION_STOP(MOTOR_1_IN_A, MOTOR_1_IN_B);
 	}
-	
-	/*============= MOTOR 2 =============*/
-	if (g_motor_2.setpoint < 0)
+	else if(signbit(motor_1_rps) == 0)
 	{
-		g_motor_2.setpoint = fabs(motor_2_rps);
-		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
-	}
-	else if(g_motor_2.setpoint > 0)
-	{
-		g_motor_2.setpoint = motor_2_rps;
-		SET_MOTOR_DIRECTION_FORWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
+		g_motor_1.setpoint = motor_1_rps;
+		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
 	}
 	else
+	{
+		g_motor_1.setpoint = fabs(motor_1_rps);
+		SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
+	}
+	
+	/*============= MOTOR 2 =============*/
+	if (motor_2_rps == 0)
 	{
 		g_motor_2.setpoint = 0;
 		SET_MOTOR_DIRECTION_STOP(MOTOR_2_IN_A, MOTOR_2_IN_B);
 	}
-		
-	/*============= MOTOR 3 =============*/
-	if (g_motor_3.setpoint < 0)
+	else if(signbit(motor_2_rps) == 0)
 	{
-		g_motor_3.setpoint = fabs(motor_3_rps);
-		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
-	}
-	else if(g_motor_3.setpoint > 0)
-	{
-		g_motor_3.setpoint = motor_3_rps;
-		SET_MOTOR_DIRECTION_FORWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
+		g_motor_2.setpoint = motor_2_rps;
+		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
 	}
 	else
 	{
+		g_motor_2.setpoint = fabs(motor_2_rps);
+		SET_MOTOR_DIRECTION_FORWARD(MOTOR_2_IN_A, MOTOR_2_IN_B);
+	}
+		
+	/*============= MOTOR 3 =============*/
+	if (motor_3_rps == 0)
+	{
 		g_motor_3.setpoint = 0;
 		SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
+	}
+	else if(signbit(motor_3_rps) == 0)
+	{
+		g_motor_3.setpoint = motor_3_rps;
+		SET_MOTOR_DIRECTION_BACKWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
+	}
+	else
+	{
+		g_motor_3.setpoint = fabs(motor_3_rps);
+		SET_MOTOR_DIRECTION_FORWARD(MOTOR_3_IN_A, MOTOR_3_IN_B);
 	}
 
 }
@@ -1052,6 +1052,7 @@ void on_received_msg_command(void)
 	memcpy((void*)&motor_3_rps_setpoint,  (const void*)(g_received_frame.p_payload +  8), sizeof(float));
 	memcpy((void*)&command_duration_ms,   (const void*)(g_received_frame.p_payload + 12), sizeof(uint32_t));
 	
+	
 	// UINT32_MAX will be used in place of `float`'s INFINITY
 	// i.e. it will denote command that never stops, in this case
 	// a command that runs for UINT32_MAX * 50ms = 214748364750 ms (approx. 2485 days)
@@ -1329,6 +1330,7 @@ int main(void)
 	sei();
 
 	enable_pid_timer();
+	pause_pid_timer();
 	enable_task_timer();
 	
 	g_frame_receiver_state = CMD_RCV_IDLE;
@@ -1384,6 +1386,21 @@ int main(void)
 		if (g_flag_command_in_queue)
 		{
 			do_execute_command();
+			
+			//WRITE_PIN(MOTOR_1_PWM, 0);
+			//
+			//g_motor_1.setpoint = 0;
+			//SET_MOTOR_DIRECTION_FORWARD(MOTOR_1_IN_A, MOTOR_1_IN_B);
+			//g_motor_2.setpoint = 0;
+			//SET_MOTOR_DIRECTION_STOP(MOTOR_2_IN_A, MOTOR_2_IN_B);
+			//g_motor_3.setpoint = 0;
+			//SET_MOTOR_DIRECTION_STOP(MOTOR_3_IN_A, MOTOR_3_IN_B);
+			//
+			//g_flag_command_running = 1;
+			//g_command_duration_counter__50ms_ticks = 0;
+			
+			//resume_pid_timer();
+			
 			g_flag_command_in_queue = 0;
 		}
 		
