@@ -1127,23 +1127,19 @@ void do_broadcast_average_rps(void)
 	const float motor_2_rps = cma_get_value(&g_motor_2.hall_encoder.average_rps);
 	const float motor_3_rps = cma_get_value(&g_motor_3.hall_encoder.average_rps);
 	
+	const uint32_t timestamp_delta_ms = g_odometry_time_since_last_broadcast__50ms_ticks * 50;
+	
 	stxetx_frame_t frame;
-	
 	stxetx_init_empty_frame(&frame);
-	
 	frame.msg_type = MSG_TYPE_ODOMETRY;
 	
-	// const uint8_t payload_size = 3 * sizeof(float);
+	uint8_t p_payload[16] = {0};
+	memcpy(p_payload + 0,	(const void*)&motor_1_rps,			sizeof(float));
+	memcpy(p_payload + 4,	(const void*)&motor_2_rps,			sizeof(float));
+	memcpy(p_payload + 8,	(const void*)&motor_3_rps,			sizeof(float));
+	memcpy(p_payload + 12,	(const void*)&timestamp_delta_ms,	sizeof(uint32_t));
 	
-	//uint8_t p_payload[payload_size] = {
-	uint8_t p_payload[12] = {0};
-		
-	memcpy(p_payload + 0, (const void*)&motor_1_rps, sizeof(float));
-	memcpy(p_payload + 4, (const void*)&motor_2_rps, sizeof(float));
-	memcpy(p_payload + 8, (const void*)&motor_3_rps, sizeof(float));
-	
-	//uint8_t ec = stxetx_add_payload(&frame, p_payload, payload_size);
-	uint8_t ec = stxetx_add_payload(&frame, p_payload, 12);
+	uint8_t ec = stxetx_add_payload(&frame, p_payload, 16);
 	
 	if (ec != STXETX_ERROR_NO_ERROR)
 	{
